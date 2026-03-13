@@ -9,7 +9,7 @@ use crossterm::{
 };
 use ratatui::prelude::*;
 use std::io::stdout;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU16, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, Notify};
@@ -69,9 +69,12 @@ async fn main() -> anyhow::Result<()> {
     let current_screen = Arc::new(AtomicU8::new(Screen::Dashboard as u8));
     let poll_notify = Arc::new(Notify::new());
 
+    let signaling_progress = Arc::new(AtomicU16::new(0));
+
     let poll_client = client.clone();
     let poll_screen = current_screen.clone();
     let poll_wake = poll_notify.clone();
+    let poll_progress = signaling_progress.clone();
     let interval = Duration::from_secs(args.interval);
     tokio::spawn(async move {
         loop {
@@ -79,7 +82,10 @@ async fn main() -> anyhow::Result<()> {
             let result = match screen {
                 Screen::Dashboard => poll_client.fetch_dashboard().await,
                 Screen::KnownPeers => poll_client.fetch_known_peers().await,
-                Screen::Signaling => poll_client.fetch_signaling().await,
+                Screen::Signaling => {
+                    poll_progress.store(0, Ordering::Relaxed);
+                    poll_client.fetch_signaling(&poll_progress).await
+                }
             };
             match result {
                 Ok(data) => {
@@ -94,9 +100,14 @@ async fn main() -> anyhow::Result<()> {
                         .await;
                 }
             }
-            tokio::select! {
-                _ = tokio::time::sleep(interval) => {}
-                _ = poll_wake.notified() => {}
+            // Dashboard auto-refreshes on interval; other tabs wait for manual trigger
+            if screen == Screen::Dashboard {
+                tokio::select! {
+                    _ = tokio::time::sleep(interval) => {}
+                    _ = poll_wake.notified() => {}
+                }
+            } else {
+                poll_wake.notified().await;
             }
         }
     });
@@ -113,14 +124,19 @@ async fn main() -> anyhow::Result<()> {
     let mut screen = Screen::Dashboard;
     let mut selected_bit: u8 = 0;
     let mut show_bit_modal = false;
+    let mut signaling_loaded = false;
 
     loop {
         while let Ok(data) = rx.try_recv() {
+            if screen == Screen::Signaling && !data.recent_block_versions.is_empty() {
+                signaling_loaded = true;
+            }
             node_data = data;
         }
 
         if last_render.elapsed() >= Duration::from_millis(100) {
-            terminal.draw(|f| ui::draw(f, &node_data, peer_scroll, block_scroll, screen, selected_bit, show_bit_modal))?;
+            let sig_progress = signaling_progress.load(Ordering::Relaxed);
+            terminal.draw(|f| ui::draw(f, &node_data, peer_scroll, block_scroll, screen, selected_bit, show_bit_modal, signaling_loaded, sig_progress))?;
             last_render = Instant::now();
         }
 
@@ -138,13 +154,20 @@ async fn main() -> anyhow::Result<()> {
                         match key.code {
                             KeyCode::Char('q') | KeyCode::Esc => break,
                             KeyCode::Tab => {
+                                let prev = screen;
                                 screen = match screen {
                                     Screen::Dashboard => Screen::KnownPeers,
                                     Screen::KnownPeers => Screen::Signaling,
                                     Screen::Signaling => Screen::Dashboard,
                                 };
                                 current_screen.store(screen as u8, Ordering::Relaxed);
-                                poll_notify.notify_one();
+                                // Signaling tab waits for explicit `r`; others fetch on entry
+                                if screen != Screen::Signaling {
+                                    poll_notify.notify_one();
+                                }
+                                if prev == Screen::Signaling {
+                                    signaling_loaded = false;
+                                }
                             }
                             KeyCode::Down | KeyCode::Char('j') => {
                                 if screen == Screen::Signaling {
@@ -163,6 +186,11 @@ async fn main() -> anyhow::Result<()> {
                             KeyCode::Enter => {
                                 if screen == Screen::Signaling {
                                     show_bit_modal = true;
+                                }
+                            }
+                            KeyCode::Char('r') => {
+                                if screen != Screen::Dashboard {
+                                    poll_notify.notify_one();
                                 }
                             }
                             KeyCode::Char('J') => {

@@ -3,7 +3,7 @@ use crate::Screen;
 use ratatui::{prelude::*, widgets::*};
 use std::collections::BTreeMap;
 
-pub fn draw(f: &mut Frame, data: &NodeData, peer_scroll: u16, block_scroll: u16, screen: Screen, selected_bit: u8, show_bit_modal: bool) {
+pub fn draw(f: &mut Frame, data: &NodeData, peer_scroll: u16, block_scroll: u16, screen: Screen, selected_bit: u8, show_bit_modal: bool, signaling_loaded: bool, signaling_progress: u16) {
     let area = f.area();
 
     let outer = Layout::default()
@@ -19,9 +19,10 @@ pub fn draw(f: &mut Frame, data: &NodeData, peer_scroll: u16, block_scroll: u16,
     match screen {
         Screen::Dashboard => draw_body(f, outer[1], data, peer_scroll, block_scroll),
         Screen::KnownPeers => draw_known_peers(f, outer[1], data, peer_scroll),
-        Screen::Signaling => draw_signaling(f, outer[1], data, selected_bit),
+        Screen::Signaling => draw_signaling(f, outer[1], data, selected_bit, signaling_loaded, signaling_progress),
     }
-    draw_footer(f, outer[2], screen);
+    let rpc_active = screen == Screen::Signaling && !signaling_loaded && signaling_progress > 0;
+    draw_footer(f, outer[2], screen, rpc_active);
 
     if show_bit_modal && screen == Screen::Signaling {
         draw_bit_modal(f, area, selected_bit, data);
@@ -49,9 +50,21 @@ fn draw_header(f: &mut Frame, area: Rect, data: &NodeData, screen: Screen) {
         Screen::Signaling => "Signaling",
     };
 
+    let refreshed = if data.fetched_at > 0 {
+        let now = chrono::Utc::now().timestamp() as u64;
+        let ago = now.saturating_sub(data.fetched_at);
+        if ago < 2 {
+            "just now".to_string()
+        } else {
+            format!("{}s ago", ago)
+        }
+    } else {
+        "-".to_string()
+    };
+
     let title = format!(
-        " Bitcoin Knots {} | {} | chain: {} | uptime: {} ",
-        screen_label, version, chain, uptime
+        " Bitcoin Knots {} | {} | chain: {} | uptime: {} | refreshed: {} ",
+        screen_label, version, chain, uptime, refreshed
     );
 
     let block = Block::default()
@@ -789,19 +802,6 @@ fn draw_known_peers_services(f: &mut Frame, area: Rect, data: &NodeData, scroll:
         })
         .collect();
 
-    // Totals row (total peers per network)
-    let mut total_cells = vec!["TOTAL".to_string()];
-    for net in &networks {
-        let (net_total, _) = &by_network[net];
-        total_cells.push(format_number(*net_total));
-    }
-    total_cells.push(format_number(grand_total));
-    total_cells.push(String::new());
-    rows.push(
-        Row::new(total_cells)
-            .style(Style::default().fg(Color::White).bold()),
-    );
-
     // Widths: service name + networks + total + description
     let mut widths = vec![Constraint::Length(24)];
     for _ in &networks {
@@ -810,7 +810,16 @@ fn draw_known_peers_services(f: &mut Frame, area: Rect, data: &NodeData, scroll:
     widths.push(Constraint::Length(14));
     widths.push(Constraint::Min(24));
 
-    let table = Table::new(rows, widths)
+    // Split area: scrollable table on top, static totals row at bottom
+    let split = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Min(4),    // scrollable service rows
+            Constraint::Length(1), // static totals row
+        ])
+        .split(area);
+
+    let table = Table::new(rows, widths.clone())
         .header(header)
         .block(
             Block::default()
@@ -821,10 +830,37 @@ fn draw_known_peers_services(f: &mut Frame, area: Rect, data: &NodeData, scroll:
         );
 
     let mut state = TableState::default().with_offset(scroll as usize);
-    f.render_stateful_widget(table, area, &mut state);
+    f.render_stateful_widget(table, split[0], &mut state);
+
+    // Static totals row
+    let mut total_cells = vec![Span::styled("  TOTAL", Style::default().fg(Color::White).bold())];
+    for net in &networks {
+        let (net_total, _) = &by_network[net];
+        total_cells.push(Span::styled(
+            format!("  {}", format_number(*net_total)),
+            Style::default().fg(Color::White).bold(),
+        ));
+    }
+    total_cells.push(Span::styled(
+        format!("  {}", format_number(grand_total)),
+        Style::default().fg(Color::White).bold(),
+    ));
+    let totals_line = Line::from(total_cells);
+    let totals_paragraph = Paragraph::new(totals_line)
+        .style(Style::default().bg(Color::Rgb(30, 30, 30)));
+    f.render_widget(totals_paragraph, split[1]);
 }
 
-fn draw_signaling(f: &mut Frame, area: Rect, data: &NodeData, selected_bit: u8) {
+fn draw_signaling(f: &mut Frame, area: Rect, data: &NodeData, selected_bit: u8, signaling_loaded: bool, progress: u16) {
+    if !signaling_loaded {
+        if progress > 0 {
+            draw_signaling_loading(f, area, progress);
+        } else {
+            draw_signaling_prompt(f, area);
+        }
+        return;
+    }
+
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -835,6 +871,83 @@ fn draw_signaling(f: &mut Frame, area: Rect, data: &NodeData, selected_bit: u8) 
 
     draw_version_bits(f, layout[0], data, selected_bit);
     draw_softforks(f, layout[1], data);
+}
+
+fn draw_signaling_loading(f: &mut Frame, area: Rect, progress: u16) {
+    let modal_width = 50u16;
+    let modal_height = 7u16;
+    let x = (area.width.saturating_sub(modal_width)) / 2 + area.x;
+    let y = (area.height.saturating_sub(modal_height)) / 2 + area.y;
+    let modal_area = Rect::new(x, y, modal_width, modal_height);
+
+    let pct = (progress as f64 / 2016.0) * 100.0;
+    let bar_width = (modal_width - 4) as usize;
+    let filled = ((pct / 100.0) * bar_width as f64) as usize;
+    let empty = bar_width.saturating_sub(filled);
+    let bar = format!("[{}{}]", "█".repeat(filled), "░".repeat(empty));
+
+    let text = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            format!("Fetching blocks... {}/{}", progress, 2016),
+            Style::default().fg(Color::Yellow).bold(),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(bar, Style::default().fg(Color::Cyan))),
+        Line::from(Span::styled(
+            format!("{:.0}%", pct),
+            Style::default().fg(Color::White),
+        )),
+    ];
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .title(" Signaling ")
+        .title_style(Style::default().fg(Color::Cyan).bold());
+
+    let paragraph = Paragraph::new(text)
+        .block(block)
+        .alignment(Alignment::Center);
+
+    f.render_widget(paragraph, modal_area);
+}
+
+fn draw_signaling_prompt(f: &mut Frame, area: Rect) {
+    let modal_width = 50u16;
+    let modal_height = 7u16;
+    let x = (area.width.saturating_sub(modal_width)) / 2 + area.x;
+    let y = (area.height.saturating_sub(modal_height)) / 2 + area.y;
+    let modal_area = Rect::new(x, y, modal_width, modal_height);
+
+    let text = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            "Signaling data not loaded",
+            Style::default().fg(Color::Yellow).bold(),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Press  r  to fetch 2,016 blocks",
+            Style::default().fg(Color::White),
+        )),
+        Line::from(Span::styled(
+            "(~1 retarget period, may take 15-30s)",
+            Style::default().fg(Color::DarkGray),
+        )),
+    ];
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .title(" Signaling ")
+        .title_style(Style::default().fg(Color::Cyan).bold());
+
+    let paragraph = Paragraph::new(text)
+        .block(block)
+        .alignment(Alignment::Center);
+
+    f.render_widget(paragraph, modal_area);
 }
 
 fn draw_softforks(f: &mut Frame, area: Rect, data: &NodeData) {
@@ -1261,15 +1374,20 @@ fn draw_bit_modal(f: &mut Frame, area: Rect, selected_bit: u8, data: &NodeData) 
     f.render_widget(paragraph, modal_area);
 }
 
-fn draw_footer(f: &mut Frame, area: Rect, screen: Screen) {
-    let text = match screen {
+fn draw_footer(f: &mut Frame, area: Rect, screen: Screen, rpc_active: bool) {
+    let hints = match screen {
         Screen::Dashboard => " q: quit | Tab: known peers | j/k: scroll peers | J/K: scroll blocks ",
-        Screen::KnownPeers => " q: quit | Tab: signaling ",
-        Screen::Signaling => " q: quit | Tab: dashboard | j/k: select bit | Enter: details ",
+        Screen::KnownPeers => " q: quit | Tab: signaling | ↑/↓: scroll services | r: refresh ",
+        Screen::Signaling => " q: quit | Tab: dashboard | ↑/↓: select bit | Enter: details | r: refresh ",
     };
-    let footer = Paragraph::new(text)
-        .style(Style::default().fg(Color::DarkGray))
-        .alignment(Alignment::Center);
+
+    let rpc_indicator = if rpc_active { " [RPC ⟳] " } else { "" };
+
+    let footer = Paragraph::new(Line::from(vec![
+        Span::styled(hints, Style::default().fg(Color::DarkGray)),
+        Span::styled(rpc_indicator, Style::default().fg(Color::Yellow)),
+    ]))
+    .alignment(Alignment::Center);
     f.render_widget(footer, area);
 }
 

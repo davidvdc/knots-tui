@@ -3,6 +3,8 @@ use reqwest::Client;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicU16, Ordering};
+use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct RpcClient {
@@ -458,7 +460,7 @@ impl RpcClient {
         })
     }
 
-    pub async fn fetch_signaling(&self) -> Result<NodeData, String> {
+    pub async fn fetch_signaling(&self, progress: &Arc<AtomicU16>) -> Result<NodeData, String> {
         let now = chrono::Utc::now().timestamp() as u64;
 
         let batch_results = self
@@ -476,10 +478,10 @@ impl RpcClient {
         let uptime: u64 =
             serde_json::from_value(batch_results[2].clone()).map_err(|e| e.to_string())?;
 
-        // Fetch last 144 blocks (~1 day) to scan version bits
+        // Fetch last 2016 blocks (~1 retarget period) to scan version bits
         let mut recent_block_versions = Vec::new();
         let mut block_hash = blockchain.bestblockhash.clone();
-        for _ in 0..144 {
+        for _ in 0..2016 {
             if block_hash.is_empty() {
                 break;
             }
@@ -491,6 +493,7 @@ impl RpcClient {
                 .unwrap_or("")
                 .to_string();
             recent_block_versions.push((height, version));
+            progress.store(recent_block_versions.len() as u16, Ordering::Relaxed);
             block_hash = prev;
         }
 
