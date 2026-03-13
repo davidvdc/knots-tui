@@ -667,13 +667,13 @@ fn service_bit_name(bit: u8) -> &'static str {
 
 fn service_bit_desc(bit: u8) -> &'static str {
     match bit {
-        0 => "Full block history",
-        1 => "UTXO queries",
-        2 => "Bloom filter support",
-        3 => "SegWit support",
-        6 => "Compact block filters",
-        10 => "Pruned, last 288 blocks",
-        24 => "v2 transport (BIP324)",
+        0 => "Serves all blocks since genesis",
+        1 => "Serves UTXO queries (BIP64)",
+        2 => "SPV bloom filter queries (BIP111)",
+        3 => "Understands SegWit (BIP144)",
+        6 => "Serves BIP157 compact block filters for light clients",
+        10 => "Pruned node, serves last 288 blocks only",
+        24 => "Encrypted P2P via v2 transport (BIP324)",
         _ => "",
     }
 }
@@ -824,18 +824,18 @@ fn draw_signaling(f: &mut Frame, area: Rect, data: &NodeData) {
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Min(6),    // softforks table
-            Constraint::Length(12), // version bits from recent blocks
+            Constraint::Min(6),    // version bits from recent blocks
+            Constraint::Length(14), // softforks table
         ])
         .split(area);
 
-    draw_softforks(f, layout[0], data);
-    draw_version_bits(f, layout[1], data);
+    draw_version_bits(f, layout[0], data);
+    draw_softforks(f, layout[1], data);
 }
 
 fn draw_softforks(f: &mut Frame, area: Rect, data: &NodeData) {
     let header = Row::new(vec![
-        "Name", "Type", "Active", "Status", "Bit", "Period", "Threshold", "Elapsed", "Count", "Possible",
+        "Name", "Type", "Active", "Height", "Status", "Bit", "Progress",
     ])
         .style(Style::default().fg(Color::Cyan).bold())
         .bottom_margin(0);
@@ -845,55 +845,60 @@ fn draw_softforks(f: &mut Frame, area: Rect, data: &NodeData) {
         .iter()
         .map(|(name, fork)| {
             let active_str = if fork.active { "yes" } else { "no" };
-            let active_color = if fork.active { Color::Green } else { Color::DarkGray };
 
-            let (status, bit, period, threshold, elapsed, count, possible) =
-                if let Some(ref bip9) = fork.bip9 {
-                    let bit_str = bip9
-                        .bit
-                        .map(|b| b.to_string())
-                        .unwrap_or_else(|| "-".to_string());
+            let height_str = fork
+                .height
+                .map(|h| format_number(h as u64))
+                .unwrap_or_else(|| "-".to_string());
 
-                    let (period, threshold, elapsed, count, possible) =
-                        if let Some(ref stats) = bip9.statistics {
-                            (
-                                format_number(stats.period),
-                                format_number(stats.threshold),
-                                format_number(stats.elapsed),
-                                format_number(stats.count),
-                                if stats.possible { "yes" } else { "no" },
-                            )
+            let (status, bit, progress) = if let Some(ref bip9) = fork.bip9 {
+                let bit_str = bip9
+                    .bit
+                    .map(|b| b.to_string())
+                    .unwrap_or_else(|| "-".to_string());
+
+                let progress = if let Some(ref stats) = bip9.statistics {
+                    format!(
+                        "{}/{} ({:.1}%)",
+                        format_number(stats.count),
+                        format_number(stats.period),
+                        if stats.period > 0 {
+                            (stats.count as f64 / stats.period as f64) * 100.0
                         } else {
-                            ("-".to_string(), "-".to_string(), "-".to_string(), "-".to_string(), "-")
-                        };
-
-                    (bip9.status.clone(), bit_str, period, threshold, elapsed, count, possible)
+                            0.0
+                        }
+                    )
                 } else {
-                    ("-".to_string(), "-".to_string(), "-".to_string(), "-".to_string(), "-".to_string(), "-".to_string(), "-")
+                    "-".to_string()
                 };
 
-            let status_color = match status.as_str() {
-                "active" => Color::Green,
-                "started" => Color::Yellow,
-                "locked_in" => Color::Cyan,
-                "defined" => Color::DarkGray,
-                "failed" => Color::Red,
-                _ => Color::White,
+                (bip9.status.clone(), bit_str, progress)
+            } else {
+                ("-".to_string(), "-".to_string(), "-".to_string())
+            };
+
+            let color = if fork.active {
+                Color::Green
+            } else {
+                match status.as_str() {
+                    "started" => Color::Yellow,
+                    "locked_in" => Color::Cyan,
+                    "defined" => Color::DarkGray,
+                    "failed" => Color::Red,
+                    _ => Color::White,
+                }
             };
 
             Row::new(vec![
                 name.clone(),
                 fork.fork_type.clone(),
                 active_str.to_string(),
+                height_str,
                 status.clone(),
                 bit,
-                period,
-                threshold,
-                elapsed,
-                count,
-                possible.to_string(),
+                progress,
             ])
-            .style(Style::default().fg(if fork.active { active_color } else { status_color }))
+            .style(Style::default().fg(color))
         })
         .collect();
 
@@ -902,12 +907,9 @@ fn draw_softforks(f: &mut Frame, area: Rect, data: &NodeData) {
         Constraint::Length(8),
         Constraint::Length(7),
         Constraint::Length(10),
-        Constraint::Length(4),
-        Constraint::Length(8),
         Constraint::Length(10),
-        Constraint::Length(8),
-        Constraint::Length(8),
-        Constraint::Length(9),
+        Constraint::Length(4),
+        Constraint::Min(20),
     ];
 
     let table = Table::new(rows, widths)
@@ -969,11 +971,11 @@ fn draw_version_bits(f: &mut Frame, area: Rect, data: &NodeData) {
         }
     }
 
-    let header = Row::new(vec!["Bit", "Name", "Signaling", "Pct"])
+    let header = Row::new(vec!["Bit", "Name", "Signaling", "Pct", "Bar"])
         .style(Style::default().fg(Color::Cyan).bold())
         .bottom_margin(0);
 
-    // Split into known and unknown bits, sort each by count descending
+    // Split into known and unknown bits, sort each by pct descending
     let mut known: Vec<(u8, u64)> = Vec::new();
     let mut unknown: Vec<(u8, u64)> = Vec::new();
     for (&bit, &count) in &bit_counts {
@@ -987,6 +989,9 @@ fn draw_version_bits(f: &mut Frame, area: Rect, data: &NodeData) {
     unknown.sort_by(|a, b| b.1.cmp(&a.1));
 
     let sorted_bits: Vec<(u8, u64)> = known.into_iter().chain(unknown.into_iter()).collect();
+
+    // Bar width based on available space
+    let bar_width = area.width.saturating_sub(60) as usize;
 
     let rows: Vec<Row> = sorted_bits
         .iter()
@@ -1004,11 +1009,19 @@ fn draw_version_bits(f: &mut Frame, area: Rect, data: &NodeData) {
                 Color::White
             };
 
+            let filled = ((pct / 100.0) * bar_width as f64) as usize;
+            let bar = format!(
+                "{}{}",
+                "\u{2588}".repeat(filled),
+                "\u{2591}".repeat(bar_width.saturating_sub(filled))
+            );
+
             Row::new(vec![
                 bit.to_string(),
                 name,
                 format!("{}/{}", format_number(count), format_number(total_blocks)),
                 format!("{:.1}%", pct),
+                bar,
             ])
             .style(Style::default().fg(color))
         })
@@ -1019,7 +1032,15 @@ fn draw_version_bits(f: &mut Frame, area: Rect, data: &NodeData) {
         Constraint::Length(20),
         Constraint::Length(12),
         Constraint::Length(8),
+        Constraint::Min(10),
     ];
+
+    // Count blocks with BIP9 version bit prefix
+    let bip9_blocks = data
+        .recent_block_versions
+        .iter()
+        .filter(|&&(_, v)| v >= 0x20000000)
+        .count() as u64;
 
     let table = Table::new(rows, widths)
         .header(header)
@@ -1028,8 +1049,8 @@ fn draw_version_bits(f: &mut Frame, area: Rect, data: &NodeData) {
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
                 .title(format!(
-                    " Version Bit Signaling (last {} blocks) ",
-                    total_blocks
+                    " Version Bit Signaling (last {} blocks, {} BIP9-versioned) ",
+                    total_blocks, bip9_blocks
                 ))
                 .title_style(Style::default().fg(Color::Yellow).bold()),
         );
