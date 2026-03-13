@@ -382,7 +382,7 @@ fn draw_mining_card(f: &mut Frame, area: Rect, data: &NodeData) {
 fn draw_peers_table(f: &mut Frame, area: Rect, data: &NodeData, scroll: u16) {
     let header = Row::new(vec![
         "ID", "Address", "Client", "Type", "Relay", "Dir", "Height",
-        "Ping", "Uptime", "Last Activity", "Sent", "Recv",
+        "Ping", "Uptime", "Ago", "Sent", "Recv",
     ])
         .style(Style::default().fg(Color::Cyan).bold())
         .bottom_margin(0);
@@ -410,8 +410,7 @@ fn draw_peers_table(f: &mut Frame, area: Rect, data: &NodeData, scroll: u16) {
             let last_activity = {
                 let most_recent = p.lastsend.max(p.lastrecv);
                 if most_recent > 0 && now > most_recent {
-                    let ago = now - most_recent;
-                    format!("{}s ago", ago)
+                    format!("{}s", now - most_recent)
                 } else {
                     "-".to_string()
                 }
@@ -451,7 +450,7 @@ fn draw_peers_table(f: &mut Frame, area: Rect, data: &NodeData, scroll: u16) {
         Constraint::Length(8),
         Constraint::Length(7),
         Constraint::Length(12),
-        Constraint::Length(13),
+        Constraint::Length(3),
         Constraint::Length(8),
         Constraint::Length(8),
     ];
