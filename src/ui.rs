@@ -652,20 +652,40 @@ fn format_count_pct(count: u64, total: u64) -> String {
     format!("{} ({:.0}%)", format_number(count), pct)
 }
 
-fn service_bit_name(bit: u8) -> String {
+fn service_bit_name(bit: u8) -> &'static str {
     match bit {
-        0 => "Full".to_string(),
-        1 => "UTXO".to_string(),
-        2 => "Bloom".to_string(),
-        3 => "SegWit".to_string(),
-        6 => "CmpctFlt".to_string(),
-        10 => "Pruned".to_string(),
-        24 => "v2Trans".to_string(),
-        n => format!("bit{}", n),
+        0 => "NODE_NETWORK",
+        1 => "NODE_GETUTXO",
+        2 => "NODE_BLOOM",
+        3 => "NODE_WITNESS",
+        6 => "NODE_COMPACT_FILTERS",
+        10 => "NODE_NETWORK_LIMITED",
+        24 => "NODE_P2P_V2",
+        _ => "",
+    }
+}
+
+fn service_bit_desc(bit: u8) -> &'static str {
+    match bit {
+        0 => "Full block history",
+        1 => "UTXO queries",
+        2 => "Bloom filter support",
+        3 => "SegWit support",
+        6 => "Compact block filters",
+        10 => "Pruned, last 288 blocks",
+        24 => "v2 transport (BIP324)",
+        _ => "",
     }
 }
 
 fn draw_known_peers_services(f: &mut Frame, area: Rect, data: &NodeData, scroll: u16) {
+    // Parse node's own service flags from hex string
+    let local_services: u64 = u64::from_str_radix(
+        data.network.localservices.trim_start_matches("0x"),
+        16,
+    )
+    .unwrap_or(0);
+
     // Discover all service bits present in the dataset
     let mut all_bits_mask: u64 = 0;
     for addr in &data.known_addresses {
@@ -702,8 +722,8 @@ fn draw_known_peers_services(f: &mut Frame, area: Rect, data: &NodeData, scroll:
 
     let networks: Vec<String> = by_network.keys().cloned().collect();
 
-    // Header: Service | network1 | network2 | ... | TOTAL
-    let mut header_cells = vec!["Service".to_string()];
+    // Header: Service | Desc | network1 | network2 | ... | TOTAL
+    let mut header_cells = vec!["Service".to_string(), "Description".to_string()];
     for net in &networks {
         header_cells.push(net.clone());
     }
@@ -731,11 +751,25 @@ fn draw_known_peers_services(f: &mut Frame, area: Rect, data: &NodeData, scroll:
     bit_totals.sort_by(|a, b| b.1.cmp(&a.1));
 
     // Rows: one per service bit, sorted by total descending
+    // Bits the node itself has are marked with *
     let mut rows: Vec<Row> = bit_totals
         .iter()
         .map(|&(i, bit_total)| {
             let bit = active_bits[i];
-            let mut cells = vec![service_bit_name(bit)];
+            let is_local = local_services & (1u64 << bit) != 0;
+            let known_name = service_bit_name(bit);
+            let name = if is_local {
+                if known_name.is_empty() {
+                    format!("* bit{}", bit)
+                } else {
+                    format!("* {}", known_name)
+                }
+            } else if known_name.is_empty() {
+                format!("  bit{}", bit)
+            } else {
+                format!("  {}", known_name)
+            };
+            let mut cells = vec![name, service_bit_desc(bit).to_string()];
 
             for net in &networks {
                 let (net_total, bit_counts) = &by_network[net];
@@ -744,12 +778,13 @@ fn draw_known_peers_services(f: &mut Frame, area: Rect, data: &NodeData, scroll:
             }
 
             cells.push(format_count_pct(bit_total, grand_total));
-            Row::new(cells).style(Style::default().fg(Color::White))
+            let color = if is_local { Color::Green } else { Color::White };
+            Row::new(cells).style(Style::default().fg(color))
         })
         .collect();
 
     // Totals row (total peers per network)
-    let mut total_cells = vec!["TOTAL".to_string()];
+    let mut total_cells = vec!["TOTAL".to_string(), String::new()];
     for net in &networks {
         let (net_total, _) = &by_network[net];
         total_cells.push(format_number(*net_total));
@@ -760,8 +795,8 @@ fn draw_known_peers_services(f: &mut Frame, area: Rect, data: &NodeData, scroll:
             .style(Style::default().fg(Color::White).bold()),
     );
 
-    // Widths: service name + one per network + total
-    let mut widths = vec![Constraint::Length(12)];
+    // Widths: service name + description + one per network + total
+    let mut widths = vec![Constraint::Length(24), Constraint::Length(24)];
     for _ in &networks {
         widths.push(Constraint::Length(14));
     }
@@ -773,7 +808,7 @@ fn draw_known_peers_services(f: &mut Frame, area: Rect, data: &NodeData, scroll:
             Block::default()
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
-                .title(" Services by Network [j/k scroll] ")
+                .title(" Services by Network (* = this node) [j/k scroll] ")
                 .title_style(Style::default().fg(Color::Yellow).bold()),
         );
 

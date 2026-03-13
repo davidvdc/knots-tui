@@ -153,6 +153,8 @@ pub struct NetworkInfo {
     #[serde(default)]
     pub incrementalfee: f64,
     #[serde(default)]
+    pub localservices: String,
+    #[serde(default)]
     pub localaddresses: Vec<LocalAddress>,
     #[serde(default)]
     pub warnings: WarningsField,
