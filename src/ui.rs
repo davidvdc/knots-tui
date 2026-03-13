@@ -3,7 +3,7 @@ use crate::Screen;
 use ratatui::{prelude::*, widgets::*};
 use std::collections::BTreeMap;
 
-pub fn draw(f: &mut Frame, data: &NodeData, peer_scroll: u16, block_scroll: u16, screen: Screen, selected_bit: u8, show_bit_modal: bool, signaling_loaded: bool, signaling_progress: u16) {
+pub fn draw(f: &mut Frame, data: &NodeData, peer_scroll: u16, block_scroll: u16, screen: Screen, selected_bit: u8, show_bit_modal: bool, signaling_loaded: bool, signaling_progress: u16, rpc_active: bool) {
     let area = f.area();
 
     let outer = Layout::default()
@@ -21,7 +21,6 @@ pub fn draw(f: &mut Frame, data: &NodeData, peer_scroll: u16, block_scroll: u16,
         Screen::KnownPeers => draw_known_peers(f, outer[1], data, peer_scroll),
         Screen::Signaling => draw_signaling(f, outer[1], data, selected_bit, signaling_loaded, signaling_progress),
     }
-    let rpc_active = screen == Screen::Signaling && !signaling_loaded && signaling_progress > 0;
     draw_footer(f, outer[2], screen, rpc_active);
 
     if show_bit_modal && screen == Screen::Signaling {
@@ -50,21 +49,9 @@ fn draw_header(f: &mut Frame, area: Rect, data: &NodeData, screen: Screen) {
         Screen::Signaling => "Signaling",
     };
 
-    let refreshed = if data.fetched_at > 0 {
-        let now = chrono::Utc::now().timestamp() as u64;
-        let ago = now.saturating_sub(data.fetched_at);
-        if ago < 2 {
-            "just now".to_string()
-        } else {
-            format!("{}s ago", ago)
-        }
-    } else {
-        "-".to_string()
-    };
-
     let title = format!(
-        " Bitcoin Knots {} | {} | chain: {} | uptime: {} | refreshed: {} ",
-        screen_label, version, chain, uptime, refreshed
+        " Bitcoin Knots {} | {} | chain: {} | uptime: {} ",
+        screen_label, version, chain, uptime
     );
 
     let block = Block::default()
@@ -950,6 +937,24 @@ fn draw_signaling_prompt(f: &mut Frame, area: Rect) {
     f.render_widget(paragraph, modal_area);
 }
 
+fn known_buried_softforks() -> BTreeMap<String, crate::rpc::SoftFork> {
+    use crate::rpc::SoftFork;
+    let mut m = BTreeMap::new();
+    let buried = |height: i64| SoftFork {
+        fork_type: "buried".to_string(),
+        active: true,
+        height: Some(height),
+        bip9: None,
+    };
+    m.insert("bip34".to_string(), buried(227931));
+    m.insert("bip66".to_string(), buried(363725));
+    m.insert("bip65".to_string(), buried(388381));
+    m.insert("csv".to_string(), buried(419328));
+    m.insert("segwit".to_string(), buried(481824));
+    m.insert("taproot".to_string(), buried(709632));
+    m
+}
+
 fn draw_softforks(f: &mut Frame, area: Rect, data: &NodeData) {
     let header = Row::new(vec![
         "Name", "Type", "Active", "Height", "Status", "Bit", "Progress",
@@ -957,8 +962,14 @@ fn draw_softforks(f: &mut Frame, area: Rect, data: &NodeData) {
         .style(Style::default().fg(Color::Cyan).bold())
         .bottom_margin(0);
 
+    // Merge node softforks with known buried defaults
+    let mut merged = known_buried_softforks();
+    for (name, fork) in &data.softforks {
+        merged.insert(name.clone(), fork.clone());
+    }
+
     // Sort: BIP9 (non-buried) first, then buried by height descending (newest first)
-    let mut sorted: Vec<(&String, &crate::rpc::SoftFork)> = data.softforks.iter().collect();
+    let mut sorted: Vec<(&String, &crate::rpc::SoftFork)> = merged.iter().collect();
     sorted.sort_by(|(_, a), (_, b)| {
         let a_buried = a.fork_type == "buried";
         let b_buried = b.fork_type == "buried";
@@ -1060,7 +1071,7 @@ fn draw_softforks(f: &mut Frame, area: Rect, data: &NodeData) {
                 .border_type(BorderType::Rounded)
                 .title(format!(
                     " Softforks ({}) ",
-                    data.softforks.len()
+                    merged.len()
                 ))
                 .title_style(Style::default().fg(Color::Cyan).bold()),
         );

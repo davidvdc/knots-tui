@@ -118,6 +118,7 @@ async fn main() -> anyhow::Result<()> {
     terminal.clear()?;
 
     let mut node_data = NodeData::default();
+    let mut signaling_data = NodeData::default();
     let mut last_render = Instant::now();
     let mut peer_scroll: u16 = 0;
     let mut block_scroll: u16 = 0;
@@ -125,18 +126,27 @@ async fn main() -> anyhow::Result<()> {
     let mut selected_bit: u8 = 0;
     let mut show_bit_modal = false;
     let mut signaling_loaded = false;
+    let mut rpc_active_until = Instant::now();
 
     loop {
         while let Ok(data) = rx.try_recv() {
             if screen == Screen::Signaling && !data.recent_block_versions.is_empty() {
                 signaling_loaded = true;
+                signaling_data = data.clone();
             }
             node_data = data;
+            rpc_active_until = Instant::now() + Duration::from_millis(500);
         }
 
         if last_render.elapsed() >= Duration::from_millis(100) {
             let sig_progress = signaling_progress.load(Ordering::Relaxed);
-            terminal.draw(|f| ui::draw(f, &node_data, peer_scroll, block_scroll, screen, selected_bit, show_bit_modal, signaling_loaded, sig_progress))?;
+            let rpc_active = Instant::now() < rpc_active_until || (screen == Screen::Signaling && !signaling_loaded && sig_progress > 0);
+            let draw_data = if screen == Screen::Signaling && signaling_loaded {
+                &signaling_data
+            } else {
+                &node_data
+            };
+            terminal.draw(|f| ui::draw(f, draw_data, peer_scroll, block_scroll, screen, selected_bit, show_bit_modal, signaling_loaded, sig_progress, rpc_active))?;
             last_render = Instant::now();
         }
 
@@ -154,7 +164,6 @@ async fn main() -> anyhow::Result<()> {
                         match key.code {
                             KeyCode::Char('q') | KeyCode::Esc => break,
                             KeyCode::Tab => {
-                                let prev = screen;
                                 screen = match screen {
                                     Screen::Dashboard => Screen::KnownPeers,
                                     Screen::KnownPeers => Screen::Signaling,
@@ -164,9 +173,6 @@ async fn main() -> anyhow::Result<()> {
                                 // Signaling tab waits for explicit `r`; others fetch on entry
                                 if screen != Screen::Signaling {
                                     poll_notify.notify_one();
-                                }
-                                if prev == Screen::Signaling {
-                                    signaling_loaded = false;
                                 }
                             }
                             KeyCode::Down | KeyCode::Char('j') => {
