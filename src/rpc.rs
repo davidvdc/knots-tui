@@ -158,6 +158,14 @@ pub struct PeerInfo {
     pub bytesrecv: u64,
     #[serde(default)]
     pub connection_type: String,
+    #[serde(default)]
+    pub conntime: u64,
+    #[serde(default)]
+    pub lastsend: u64,
+    #[serde(default)]
+    pub lastrecv: u64,
+    #[serde(default)]
+    pub relaytxes: bool,
 }
 
 #[derive(Default, Clone, Debug, Deserialize)]

@@ -380,9 +380,14 @@ fn draw_mining_card(f: &mut Frame, area: Rect, data: &NodeData) {
 }
 
 fn draw_peers_table(f: &mut Frame, area: Rect, data: &NodeData, scroll: u16) {
-    let header = Row::new(vec!["ID", "Address", "Client", "Type", "Dir", "Height", "Ping", "Sent", "Recv"])
+    let header = Row::new(vec![
+        "ID", "Address", "Client", "Type", "Relay", "Dir", "Height",
+        "Ping", "Uptime", "Last Activity", "Sent", "Recv",
+    ])
         .style(Style::default().fg(Color::Cyan).bold())
         .bottom_margin(0);
+
+    let now = chrono::Utc::now().timestamp() as u64;
 
     let rows: Vec<Row> = data
         .peers
@@ -396,14 +401,35 @@ fn draw_peers_table(f: &mut Frame, area: Rect, data: &NodeData, scroll: u16) {
 
             let client = p.subver.trim_matches('/').to_string();
 
+            let uptime = if p.conntime > 0 && now > p.conntime {
+                format_duration(now - p.conntime)
+            } else {
+                "-".to_string()
+            };
+
+            let last_activity = {
+                let most_recent = p.lastsend.max(p.lastrecv);
+                if most_recent > 0 && now > most_recent {
+                    let ago = now - most_recent;
+                    format!("{}s ago", ago)
+                } else {
+                    "-".to_string()
+                }
+            };
+
+            let relay = if p.relaytxes { "yes" } else { "no" };
+
             Row::new(vec![
                 p.id.to_string(),
                 p.addr.clone(),
                 client,
                 p.connection_type.clone(),
+                relay.to_string(),
                 dir.to_string(),
                 p.synced_blocks.to_string(),
                 ping,
+                uptime,
+                last_activity,
                 format_bytes_short(p.bytessent),
                 format_bytes_short(p.bytesrecv),
             ])
@@ -419,10 +445,13 @@ fn draw_peers_table(f: &mut Frame, area: Rect, data: &NodeData, scroll: u16) {
         Constraint::Length(4),
         Constraint::Min(18),
         Constraint::Min(30),
-        Constraint::Length(14),
+        Constraint::Length(19),
+        Constraint::Length(5),
         Constraint::Length(4),
         Constraint::Length(8),
         Constraint::Length(7),
+        Constraint::Length(12),
+        Constraint::Length(13),
         Constraint::Length(8),
         Constraint::Length(8),
     ];
