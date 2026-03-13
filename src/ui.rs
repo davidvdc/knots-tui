@@ -525,7 +525,7 @@ fn draw_known_peers(f: &mut Frame, area: Rect, data: &NodeData) {
     let now = data.fetched_at;
 
     // Time buckets
-    let bucket_labels = ["<1h", "<6h", "<1d", "<1w", "<30d", ">30d"];
+    let bucket_labels = ["<1h", "1-6h", "6-24h", "1-7d", "7-30d", ">30d"];
     let bucket_thresholds: [u64; 6] = [3600, 21600, 86400, 604800, 2592000, u64::MAX];
 
     // Group by network type, then bucket by last-seen age
