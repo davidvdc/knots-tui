@@ -722,12 +722,13 @@ fn draw_known_peers_services(f: &mut Frame, area: Rect, data: &NodeData, scroll:
 
     let networks: Vec<String> = by_network.keys().cloned().collect();
 
-    // Header: Service | Desc | network1 | network2 | ... | TOTAL
-    let mut header_cells = vec!["Service".to_string(), "Description".to_string()];
+    // Header: Service | network1 | network2 | ... | TOTAL | Description
+    let mut header_cells = vec!["Service".to_string()];
     for net in &networks {
         header_cells.push(net.clone());
     }
     header_cells.push("TOTAL".to_string());
+    header_cells.push("Description".to_string());
 
     let header = Row::new(header_cells)
         .style(Style::default().fg(Color::Cyan).bold())
@@ -769,7 +770,7 @@ fn draw_known_peers_services(f: &mut Frame, area: Rect, data: &NodeData, scroll:
             } else {
                 format!("  {}", known_name)
             };
-            let mut cells = vec![name, service_bit_desc(bit).to_string()];
+            let mut cells = vec![name];
 
             for net in &networks {
                 let (net_total, bit_counts) = &by_network[net];
@@ -778,29 +779,32 @@ fn draw_known_peers_services(f: &mut Frame, area: Rect, data: &NodeData, scroll:
             }
 
             cells.push(format_count_pct(bit_total, grand_total));
+            cells.push(service_bit_desc(bit).to_string());
             let color = if is_local { Color::Green } else { Color::White };
             Row::new(cells).style(Style::default().fg(color))
         })
         .collect();
 
     // Totals row (total peers per network)
-    let mut total_cells = vec!["TOTAL".to_string(), String::new()];
+    let mut total_cells = vec!["TOTAL".to_string()];
     for net in &networks {
         let (net_total, _) = &by_network[net];
         total_cells.push(format_number(*net_total));
     }
     total_cells.push(format_number(grand_total));
+    total_cells.push(String::new());
     rows.push(
         Row::new(total_cells)
             .style(Style::default().fg(Color::White).bold()),
     );
 
-    // Widths: service name + description + one per network + total
-    let mut widths = vec![Constraint::Length(24), Constraint::Length(24)];
+    // Widths: service name + networks + total + description
+    let mut widths = vec![Constraint::Length(24)];
     for _ in &networks {
         widths.push(Constraint::Length(14));
     }
     widths.push(Constraint::Length(14));
+    widths.push(Constraint::Min(24));
 
     let table = Table::new(rows, widths)
         .header(header)
