@@ -387,7 +387,7 @@ fn draw_peers_table(f: &mut Frame, area: Rect, data: &NodeData, scroll: u16) {
         .style(Style::default().fg(Color::Cyan).bold())
         .bottom_margin(0);
 
-    let now = chrono::Utc::now().timestamp() as u64;
+    let now = data.fetched_at;
 
     let rows: Vec<Row> = data
         .peers
@@ -410,7 +410,12 @@ fn draw_peers_table(f: &mut Frame, area: Rect, data: &NodeData, scroll: u16) {
             let last_activity = {
                 let most_recent = p.lastsend.max(p.lastrecv);
                 if most_recent > 0 && now > most_recent {
-                    format!("{}s", now - most_recent)
+                    let secs = now - most_recent;
+                    if secs > 99 {
+                        format!("{}", secs)
+                    } else {
+                        format!("{}s", secs)
+                    }
                 } else {
                     "-".to_string()
                 }
@@ -461,7 +466,11 @@ fn draw_peers_table(f: &mut Frame, area: Rect, data: &NodeData, scroll: u16) {
             Block::default()
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
-                .title(format!(" Peers ({}) [j/k scroll] ", data.peers.len()))
+                .title(format!(
+                    " Peers ({}) | known: {} [j/k scroll] ",
+                    data.peers.len(),
+                    format_number(data.known_peers)
+                ))
                 .title_style(Style::default().fg(Color::Cyan).bold()),
         )
         .row_highlight_style(Style::default().bg(Color::DarkGray));

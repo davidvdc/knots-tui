@@ -21,6 +21,8 @@ pub struct NodeData {
     pub net_totals: NetTotals,
     pub uptime: u64,
     pub recent_blocks: Vec<BlockInfo>,
+    pub fetched_at: u64,
+    pub known_peers: u64,
 }
 
 #[derive(Default, Clone, Debug, Deserialize)]
@@ -284,6 +286,8 @@ impl RpcClient {
 
     pub async fn fetch_all(&self) -> Result<NodeData, String> {
         // Batch the main info calls
+        let now = chrono::Utc::now().timestamp() as u64;
+
         let batch_results = self
             .batch_call(&[
                 ("getblockchaininfo", json!([])),
@@ -293,6 +297,7 @@ impl RpcClient {
                 ("getpeerinfo", json!([])),
                 ("getnettotals", json!([])),
                 ("uptime", json!([])),
+                ("getnodeaddresses", json!([0])),
             ])
             .await?;
 
@@ -310,6 +315,10 @@ impl RpcClient {
             serde_json::from_value(batch_results[5].clone()).map_err(|e| e.to_string())?;
         let uptime: u64 =
             serde_json::from_value(batch_results[6].clone()).map_err(|e| e.to_string())?;
+        let known_peers = batch_results[7]
+            .as_array()
+            .map(|a| a.len() as u64)
+            .unwrap_or(0);
 
         // Fetch recent blocks (last 8)
         let mut recent_blocks = Vec::new();
@@ -352,6 +361,8 @@ impl RpcClient {
             net_totals,
             uptime,
             recent_blocks,
+            fetched_at: now,
+            known_peers,
         })
     }
 }
