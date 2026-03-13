@@ -522,16 +522,38 @@ fn draw_blocks_table(f: &mut Frame, area: Rect, data: &NodeData, block_scroll: u
 }
 
 fn draw_known_peers(f: &mut Frame, area: Rect, data: &NodeData) {
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(10), // time buckets table
+            Constraint::Min(8),    // services table
+        ])
+        .split(area);
+
+    draw_known_peers_time(f, layout[0], data);
+    draw_known_peers_services(f, layout[1], data);
+}
+
+fn net_color(net: &str) -> Color {
+    match net {
+        "ipv4" => Color::Green,
+        "ipv6" => Color::Blue,
+        "onion" => Color::Magenta,
+        "i2p" => Color::Yellow,
+        "cjdns" => Color::Cyan,
+        _ => Color::Gray,
+    }
+}
+
+fn draw_known_peers_time(f: &mut Frame, area: Rect, data: &NodeData) {
     let now = data.fetched_at;
 
-    // Time buckets
     let bucket_labels = ["1d", "2d", "3d", "4d", "5d", "6d", "7d", "7-14d", "14-30d", "30d+"];
     let day: u64 = 86400;
     let bucket_thresholds: [u64; 10] = [
         day, 2*day, 3*day, 4*day, 5*day, 6*day, 7*day, 14*day, 30*day, u64::MAX,
     ];
 
-    // Group by network type, then bucket by last-seen age
     let mut network_buckets: BTreeMap<String, [u64; 10]> = BTreeMap::new();
 
     for addr in &data.known_addresses {
@@ -550,7 +572,6 @@ fn draw_known_peers(f: &mut Frame, area: Rect, data: &NodeData) {
         buckets[bucket_idx] += 1;
     }
 
-    // Build totals row
     let mut totals = [0u64; 10];
     for buckets in network_buckets.values() {
         for (i, &count) in buckets.iter().enumerate() {
@@ -558,7 +579,6 @@ fn draw_known_peers(f: &mut Frame, area: Rect, data: &NodeData) {
         }
     }
 
-    // Header
     let mut header_cells = vec!["Network".to_string()];
     header_cells.extend(bucket_labels.iter().map(|s| s.to_string()));
     header_cells.push("Total".to_string());
@@ -567,7 +587,6 @@ fn draw_known_peers(f: &mut Frame, area: Rect, data: &NodeData) {
         .style(Style::default().fg(Color::Cyan).bold())
         .bottom_margin(0);
 
-    // Data rows
     let mut rows: Vec<Row> = network_buckets
         .iter()
         .map(|(net, buckets)| {
@@ -577,21 +596,10 @@ fn draw_known_peers(f: &mut Frame, area: Rect, data: &NodeData) {
                 cells.push(format_number(count));
             }
             cells.push(format_number(total));
-
-            let color = match net.as_str() {
-                "ipv4" => Color::Green,
-                "ipv6" => Color::Blue,
-                "onion" => Color::Magenta,
-                "i2p" => Color::Yellow,
-                "cjdns" => Color::Cyan,
-                _ => Color::Gray,
-            };
-
-            Row::new(cells).style(Style::default().fg(color))
+            Row::new(cells).style(Style::default().fg(net_color(net)))
         })
         .collect();
 
-    // Totals row
     let grand_total: u64 = totals.iter().sum();
     let mut total_cells = vec!["TOTAL".to_string()];
     for &count in &totals {
@@ -625,10 +633,126 @@ fn draw_known_peers(f: &mut Frame, area: Rect, data: &NodeData) {
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
                 .title(format!(
-                    " Known Addresses ({}) by Network and Last Seen ",
+                    " Known Addresses ({}) by Last Seen ",
                     format_number(data.known_peers)
                 ))
                 .title_style(Style::default().fg(Color::Cyan).bold()),
+        );
+
+    f.render_widget(table, area);
+}
+
+fn format_count_pct(count: u64, total: u64) -> String {
+    if total == 0 {
+        return "0".to_string();
+    }
+    let pct = (count as f64 / total as f64) * 100.0;
+    format!("{} ({:.0}%)", format_number(count), pct)
+}
+
+fn service_bit_name(bit: u8) -> String {
+    match bit {
+        0 => "Full".to_string(),
+        1 => "UTXO".to_string(),
+        2 => "Bloom".to_string(),
+        3 => "SegWit".to_string(),
+        6 => "CmpctFlt".to_string(),
+        10 => "Pruned".to_string(),
+        24 => "v2Trans".to_string(),
+        n => format!("bit{}", n),
+    }
+}
+
+fn draw_known_peers_services(f: &mut Frame, area: Rect, data: &NodeData) {
+    // Discover all service bits present in the dataset
+    let mut all_bits_mask: u64 = 0;
+    for addr in &data.known_addresses {
+        all_bits_mask |= addr.services;
+    }
+
+    // Collect active bit positions, sorted
+    let mut active_bits: Vec<u8> = Vec::new();
+    for bit in 0..64u8 {
+        if all_bits_mask & (1u64 << bit) != 0 {
+            active_bits.push(bit);
+        }
+    }
+
+    // Count per network per bit
+    let mut by_network: BTreeMap<String, (u64, Vec<u64>)> = BTreeMap::new();
+
+    for addr in &data.known_addresses {
+        let net = if addr.network.is_empty() {
+            "unknown".to_string()
+        } else {
+            addr.network.clone()
+        };
+        let entry = by_network
+            .entry(net)
+            .or_insert_with(|| (0, vec![0u64; active_bits.len()]));
+        entry.0 += 1;
+        for (i, &bit) in active_bits.iter().enumerate() {
+            if addr.services & (1u64 << bit) != 0 {
+                entry.1[i] += 1;
+            }
+        }
+    }
+
+    // Header
+    let mut header_cells = vec!["Network".to_string(), "Total".to_string()];
+    for &bit in &active_bits {
+        header_cells.push(service_bit_name(bit));
+    }
+
+    let header = Row::new(header_cells)
+        .style(Style::default().fg(Color::Cyan).bold())
+        .bottom_margin(0);
+
+    // Aggregate totals
+    let mut agg_total: u64 = 0;
+    let mut agg_bits = vec![0u64; active_bits.len()];
+
+    let mut rows: Vec<Row> = by_network
+        .iter()
+        .map(|(net, (total, bit_counts))| {
+            agg_total += total;
+            for (i, &count) in bit_counts.iter().enumerate() {
+                agg_bits[i] += count;
+            }
+
+            let mut cells = vec![net.clone(), format_number(*total)];
+            for (i, &count) in bit_counts.iter().enumerate() {
+                let _ = i;
+                cells.push(format_count_pct(count, *total));
+            }
+            Row::new(cells).style(Style::default().fg(net_color(net)))
+        })
+        .collect();
+
+    // Totals row
+    let mut total_cells = vec!["TOTAL".to_string(), format_number(agg_total)];
+    for &count in &agg_bits {
+        total_cells.push(format_count_pct(count, agg_total));
+    }
+    rows.push(
+        Row::new(total_cells)
+            .style(Style::default().fg(Color::White).bold()),
+    );
+
+    // Widths: network + total + one per active bit
+    let mut widths = vec![Constraint::Length(10), Constraint::Length(10)];
+    for _ in &active_bits {
+        widths.push(Constraint::Length(14));
+    }
+
+    let table = Table::new(rows, widths)
+        .header(header)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .title(" Services by Network ")
+                .title_style(Style::default().fg(Color::Yellow).bold()),
         );
 
     f.render_widget(table, area);
