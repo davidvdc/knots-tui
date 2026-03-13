@@ -712,14 +712,14 @@ fn format_duration(seconds: u64) -> String {
 
 fn format_hashrate(hps: f64) -> String {
     if hps >= 1e18 {
-        format!("{:.2} EH/s", hps / 1e18)
+        format!("~{:.2} EH/s", hps / 1e18)
     } else if hps >= 1e15 {
-        format!("{:.2} PH/s", hps / 1e15)
+        format!("~{:.2} PH/s", hps / 1e15)
     } else if hps >= 1e12 {
-        format!("{:.2} TH/s", hps / 1e12)
+        format!("~{:.2} TH/s", hps / 1e12)
     } else if hps >= 1e9 {
-        format!("{:.2} GH/s", hps / 1e9)
+        format!("~{:.2} GH/s", hps / 1e9)
     } else {
-        format!("{:.2} H/s", hps)
+        format!("~{:.2} H/s", hps)
     }
 }
