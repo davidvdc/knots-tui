@@ -23,6 +23,21 @@ pub struct NodeData {
     pub recent_blocks: Vec<BlockInfo>,
     pub fetched_at: u64,
     pub known_peers: u64,
+    pub known_addresses: Vec<KnownAddress>,
+}
+
+#[derive(Default, Clone, Debug, Deserialize)]
+pub struct KnownAddress {
+    #[serde(default)]
+    pub time: u64,
+    #[serde(default)]
+    pub services: u64,
+    #[serde(default)]
+    pub address: String,
+    #[serde(default)]
+    pub port: u16,
+    #[serde(default)]
+    pub network: String,
 }
 
 #[derive(Default, Clone, Debug, Deserialize)]
@@ -315,10 +330,9 @@ impl RpcClient {
             serde_json::from_value(batch_results[5].clone()).map_err(|e| e.to_string())?;
         let uptime: u64 =
             serde_json::from_value(batch_results[6].clone()).map_err(|e| e.to_string())?;
-        let known_peers = batch_results[7]
-            .as_array()
-            .map(|a| a.len() as u64)
-            .unwrap_or(0);
+        let known_addresses: Vec<KnownAddress> =
+            serde_json::from_value(batch_results[7].clone()).unwrap_or_default();
+        let known_peers = known_addresses.len() as u64;
 
         // Fetch recent blocks (last 8)
         let mut recent_blocks = Vec::new();
@@ -363,6 +377,7 @@ impl RpcClient {
             recent_blocks,
             fetched_at: now,
             known_peers,
+            known_addresses,
         })
     }
 }

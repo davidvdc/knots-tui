@@ -14,6 +14,12 @@ use tokio::sync::mpsc;
 
 use rpc::{NodeData, RpcClient};
 
+#[derive(Clone, Copy, PartialEq)]
+pub enum Screen {
+    Dashboard,
+    KnownPeers,
+}
+
 #[derive(Parser)]
 #[command(name = "knots-tui", about = "Bitcoin Knots node dashboard")]
 struct Args {
@@ -59,7 +65,6 @@ async fn main() -> anyhow::Result<()> {
                     let _ = tx.send(data).await;
                 }
                 Err(e) => {
-                    // Send error state
                     let _ = tx
                         .send(NodeData {
                             error: Some(format!("{}", e)),
@@ -82,15 +87,15 @@ async fn main() -> anyhow::Result<()> {
     let mut last_render = Instant::now();
     let mut peer_scroll: u16 = 0;
     let mut block_scroll: u16 = 0;
+    let mut screen = Screen::Dashboard;
 
     loop {
-        // Drain latest data from channel
         while let Ok(data) = rx.try_recv() {
             node_data = data;
         }
 
         if last_render.elapsed() >= Duration::from_millis(100) {
-            terminal.draw(|f| ui::draw(f, &node_data, peer_scroll, block_scroll))?;
+            terminal.draw(|f| ui::draw(f, &node_data, peer_scroll, block_scroll, screen))?;
             last_render = Instant::now();
         }
 
@@ -99,6 +104,12 @@ async fn main() -> anyhow::Result<()> {
                 if key.kind == KeyEventKind::Press {
                     match key.code {
                         KeyCode::Char('q') | KeyCode::Esc => break,
+                        KeyCode::Tab => {
+                            screen = match screen {
+                                Screen::Dashboard => Screen::KnownPeers,
+                                Screen::KnownPeers => Screen::Dashboard,
+                            };
+                        }
                         KeyCode::Down | KeyCode::Char('j') => {
                             peer_scroll = peer_scroll.saturating_add(1);
                         }

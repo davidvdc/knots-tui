@@ -1,10 +1,11 @@
 use crate::rpc::NodeData;
+use crate::Screen;
 use ratatui::{prelude::*, widgets::*};
+use std::collections::BTreeMap;
 
-pub fn draw(f: &mut Frame, data: &NodeData, peer_scroll: u16, block_scroll: u16) {
+pub fn draw(f: &mut Frame, data: &NodeData, peer_scroll: u16, block_scroll: u16, screen: Screen) {
     let area = f.area();
 
-    // Overall layout: header + body + footer
     let outer = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -14,12 +15,15 @@ pub fn draw(f: &mut Frame, data: &NodeData, peer_scroll: u16, block_scroll: u16)
         ])
         .split(area);
 
-    draw_header(f, outer[0], data);
-    draw_body(f, outer[1], data, peer_scroll, block_scroll);
-    draw_footer(f, outer[2]);
+    draw_header(f, outer[0], data, screen);
+    match screen {
+        Screen::Dashboard => draw_body(f, outer[1], data, peer_scroll, block_scroll),
+        Screen::KnownPeers => draw_known_peers(f, outer[1], data),
+    }
+    draw_footer(f, outer[2], screen);
 }
 
-fn draw_header(f: &mut Frame, area: Rect, data: &NodeData) {
+fn draw_header(f: &mut Frame, area: Rect, data: &NodeData, screen: Screen) {
     let version = if !data.network.subversion.is_empty() {
         data.network.subversion.clone()
     } else {
@@ -34,9 +38,14 @@ fn draw_header(f: &mut Frame, area: Rect, data: &NodeData) {
 
     let uptime = format_duration(data.uptime);
 
+    let screen_label = match screen {
+        Screen::Dashboard => "Dashboard",
+        Screen::KnownPeers => "Known Peers",
+    };
+
     let title = format!(
-        " Bitcoin Knots Dashboard | {} | chain: {} | uptime: {} ",
-        version, chain, uptime
+        " Bitcoin Knots {} | {} | chain: {} | uptime: {} ",
+        screen_label, version, chain, uptime
     );
 
     let block = Block::default()
@@ -512,8 +521,118 @@ fn draw_blocks_table(f: &mut Frame, area: Rect, data: &NodeData, block_scroll: u
     f.render_stateful_widget(table, area, &mut state);
 }
 
-fn draw_footer(f: &mut Frame, area: Rect) {
-    let footer = Paragraph::new(" q: quit | j/k: scroll peers | J/K: scroll blocks ")
+fn draw_known_peers(f: &mut Frame, area: Rect, data: &NodeData) {
+    let now = data.fetched_at;
+
+    // Time buckets
+    let bucket_labels = ["<1h", "<6h", "<1d", "<1w", "<30d", ">30d"];
+    let bucket_thresholds: [u64; 6] = [3600, 21600, 86400, 604800, 2592000, u64::MAX];
+
+    // Group by network type, then bucket by last-seen age
+    let mut network_buckets: BTreeMap<String, [u64; 6]> = BTreeMap::new();
+
+    for addr in &data.known_addresses {
+        let net = if addr.network.is_empty() {
+            "unknown".to_string()
+        } else {
+            addr.network.clone()
+        };
+        let age = now.saturating_sub(addr.time);
+        let bucket_idx = bucket_thresholds
+            .iter()
+            .position(|&t| age < t)
+            .unwrap_or(5);
+
+        let buckets = network_buckets.entry(net).or_insert([0; 6]);
+        buckets[bucket_idx] += 1;
+    }
+
+    // Build totals row
+    let mut totals = [0u64; 6];
+    for buckets in network_buckets.values() {
+        for (i, &count) in buckets.iter().enumerate() {
+            totals[i] += count;
+        }
+    }
+
+    // Header
+    let mut header_cells = vec!["Network".to_string()];
+    header_cells.extend(bucket_labels.iter().map(|s| s.to_string()));
+    header_cells.push("Total".to_string());
+
+    let header = Row::new(header_cells)
+        .style(Style::default().fg(Color::Cyan).bold())
+        .bottom_margin(0);
+
+    // Data rows
+    let mut rows: Vec<Row> = network_buckets
+        .iter()
+        .map(|(net, buckets)| {
+            let total: u64 = buckets.iter().sum();
+            let mut cells = vec![net.clone()];
+            for &count in buckets {
+                cells.push(format_number(count));
+            }
+            cells.push(format_number(total));
+
+            let color = match net.as_str() {
+                "ipv4" => Color::Green,
+                "ipv6" => Color::Blue,
+                "onion" => Color::Magenta,
+                "i2p" => Color::Yellow,
+                "cjdns" => Color::Cyan,
+                _ => Color::Gray,
+            };
+
+            Row::new(cells).style(Style::default().fg(color))
+        })
+        .collect();
+
+    // Totals row
+    let grand_total: u64 = totals.iter().sum();
+    let mut total_cells = vec!["TOTAL".to_string()];
+    for &count in &totals {
+        total_cells.push(format_number(count));
+    }
+    total_cells.push(format_number(grand_total));
+    rows.push(
+        Row::new(total_cells)
+            .style(Style::default().fg(Color::White).bold()),
+    );
+
+    let widths = [
+        Constraint::Length(10),
+        Constraint::Length(8),
+        Constraint::Length(8),
+        Constraint::Length(8),
+        Constraint::Length(8),
+        Constraint::Length(8),
+        Constraint::Length(8),
+        Constraint::Length(10),
+    ];
+
+    let table = Table::new(rows, widths)
+        .header(header)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .title(format!(
+                    " Known Addresses ({}) by Network and Last Seen ",
+                    format_number(data.known_peers)
+                ))
+                .title_style(Style::default().fg(Color::Cyan).bold()),
+        );
+
+    f.render_widget(table, area);
+}
+
+fn draw_footer(f: &mut Frame, area: Rect, screen: Screen) {
+    let text = match screen {
+        Screen::Dashboard => " q: quit | Tab: known peers | j/k: scroll peers | J/K: scroll blocks ",
+        Screen::KnownPeers => " q: quit | Tab: dashboard ",
+    };
+    let footer = Paragraph::new(text)
         .style(Style::default().fg(Color::DarkGray))
         .alignment(Alignment::Center);
     f.render_widget(footer, area);
