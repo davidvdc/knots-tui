@@ -775,11 +775,13 @@ fn draw_signaling(f: &mut Frame, area: Rect, data: &NodeData) {
         .constraints([
             Constraint::Min(6),    // softforks table
             Constraint::Length(12), // version bits from recent blocks
+            Constraint::Length(12), // peer clients breakdown
         ])
         .split(area);
 
     draw_softforks(f, layout[0], data);
     draw_version_bits(f, layout[1], data);
+    draw_peer_clients(f, layout[2], data);
 }
 
 fn draw_softforks(f: &mut Frame, area: Rect, data: &NodeData) {
@@ -960,6 +962,95 @@ fn draw_version_bits(f: &mut Frame, area: Rect, data: &NodeData) {
                     total_blocks
                 ))
                 .title_style(Style::default().fg(Color::Yellow).bold()),
+        );
+
+    f.render_widget(table, area);
+}
+
+fn draw_peer_clients(f: &mut Frame, area: Rect, data: &NodeData) {
+    let mut client_counts: BTreeMap<String, (u64, u64)> = BTreeMap::new(); // (inbound, outbound)
+    let total = data.peers.len() as u64;
+
+    for p in &data.peers {
+        let client = p.subver.trim_matches('/').to_string();
+        let label = if client.is_empty() {
+            "unknown".to_string()
+        } else {
+            client
+        };
+        let entry = client_counts.entry(label).or_insert((0, 0));
+        if p.inbound {
+            entry.0 += 1;
+        } else {
+            entry.1 += 1;
+        }
+    }
+
+    let knots_count: u64 = data
+        .peers
+        .iter()
+        .filter(|p| {
+            let s = p.subver.to_lowercase();
+            s.contains("knots")
+        })
+        .count() as u64;
+
+    let header = Row::new(vec!["Client", "In", "Out", "Total", "Pct"])
+        .style(Style::default().fg(Color::Cyan).bold())
+        .bottom_margin(0);
+
+    // Sort by total count descending
+    let mut sorted: Vec<_> = client_counts.iter().collect();
+    sorted.sort_by(|a, b| (b.1 .0 + b.1 .1).cmp(&(a.1 .0 + a.1 .1)));
+
+    let rows: Vec<Row> = sorted
+        .iter()
+        .map(|(name, (inb, outb))| {
+            let t = inb + outb;
+            let pct = if total > 0 {
+                (t as f64 / total as f64) * 100.0
+            } else {
+                0.0
+            };
+            let is_knots = name.to_lowercase().contains("knots");
+            let color = if is_knots { Color::Green } else { Color::White };
+            Row::new(vec![
+                name.to_string(),
+                inb.to_string(),
+                outb.to_string(),
+                t.to_string(),
+                format!("{:.0}%", pct),
+            ])
+            .style(Style::default().fg(color))
+        })
+        .collect();
+
+    let widths = [
+        Constraint::Min(30),
+        Constraint::Length(5),
+        Constraint::Length(5),
+        Constraint::Length(6),
+        Constraint::Length(6),
+    ];
+
+    let knots_label = if total > 0 {
+        let pct = (knots_count as f64 / total as f64) * 100.0;
+        format!(
+            " Peer Clients ({}) | Knots: {} ({:.0}%) ",
+            total, knots_count, pct
+        )
+    } else {
+        " Peer Clients (0) ".to_string()
+    };
+
+    let table = Table::new(rows, widths)
+        .header(header)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .title(knots_label)
+                .title_style(Style::default().fg(Color::Green).bold()),
         );
 
     f.render_widget(table, area);
