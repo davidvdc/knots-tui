@@ -68,39 +68,39 @@ async fn main() -> anyhow::Result<()> {
     let (tx, mut rx) = mpsc::channel::<NodeData>(4);
     let current_screen = Arc::new(AtomicU8::new(Screen::Dashboard as u8));
     let poll_notify = Arc::new(Notify::new());
+    let signaling_notify = Arc::new(Notify::new());
 
     let signaling_progress = Arc::new(AtomicU16::new(0));
 
+    // Main poll loop: handles Dashboard and KnownPeers
     let poll_client = client.clone();
     let poll_screen = current_screen.clone();
     let poll_wake = poll_notify.clone();
-    let poll_progress = signaling_progress.clone();
+    let poll_tx = tx.clone();
     let interval = Duration::from_secs(args.interval);
     tokio::spawn(async move {
         loop {
             let screen = Screen::from_u8(poll_screen.load(Ordering::Relaxed));
             let result = match screen {
-                Screen::Dashboard => poll_client.fetch_dashboard().await,
-                Screen::KnownPeers => poll_client.fetch_known_peers().await,
-                Screen::Signaling => {
-                    poll_progress.store(0, Ordering::Relaxed);
-                    poll_client.fetch_signaling(&poll_progress, &tx).await
-                }
+                Screen::Dashboard => Some(poll_client.fetch_dashboard().await),
+                Screen::KnownPeers => Some(poll_client.fetch_known_peers().await),
+                Screen::Signaling => None, // handled by signaling task
             };
-            match result {
-                Ok(data) => {
-                    let _ = tx.send(data).await;
-                }
-                Err(e) => {
-                    let _ = tx
-                        .send(NodeData {
-                            error: Some(format!("{}", e)),
-                            ..Default::default()
-                        })
-                        .await;
+            if let Some(result) = result {
+                match result {
+                    Ok(data) => {
+                        let _ = poll_tx.send(data).await;
+                    }
+                    Err(e) => {
+                        let _ = poll_tx
+                            .send(NodeData {
+                                error: Some(format!("{}", e)),
+                                ..Default::default()
+                            })
+                            .await;
+                    }
                 }
             }
-            // Dashboard auto-refreshes on interval; other tabs wait for manual trigger
             if screen == Screen::Dashboard {
                 tokio::select! {
                     _ = tokio::time::sleep(interval) => {}
@@ -108,6 +108,32 @@ async fn main() -> anyhow::Result<()> {
                 }
             } else {
                 poll_wake.notified().await;
+            }
+        }
+    });
+
+    // Separate signaling task: runs independently so it doesn't block dashboard
+    let sig_client = client.clone();
+    let sig_progress = signaling_progress.clone();
+    let sig_wake = signaling_notify.clone();
+    let sig_tx = tx.clone();
+    tokio::spawn(async move {
+        loop {
+            sig_wake.notified().await;
+            sig_progress.store(0, Ordering::Relaxed);
+            let result = sig_client.fetch_signaling(&sig_progress, &sig_tx).await;
+            match result {
+                Ok(data) => {
+                    let _ = sig_tx.send(data).await;
+                }
+                Err(e) => {
+                    let _ = sig_tx
+                        .send(NodeData {
+                            error: Some(format!("{}", e)),
+                            ..Default::default()
+                        })
+                        .await;
+                }
             }
         }
     });
@@ -171,10 +197,8 @@ async fn main() -> anyhow::Result<()> {
                                     Screen::Signaling => Screen::Dashboard,
                                 };
                                 current_screen.store(screen as u8, Ordering::Relaxed);
-                                // Signaling tab waits for explicit `r`; others fetch on entry
-                                if screen != Screen::Signaling {
-                                    poll_notify.notify_one();
-                                }
+                                // Wake the main poll loop for Dashboard/KnownPeers
+                                poll_notify.notify_one();
                             }
                             KeyCode::Down | KeyCode::Char('j') => {
                                 if screen == Screen::Signaling {
@@ -196,7 +220,9 @@ async fn main() -> anyhow::Result<()> {
                                 }
                             }
                             KeyCode::Char('r') => {
-                                if screen != Screen::Dashboard {
+                                if screen == Screen::Signaling {
+                                    signaling_notify.notify_one();
+                                } else if screen == Screen::KnownPeers {
                                     poll_notify.notify_one();
                                 }
                             }
