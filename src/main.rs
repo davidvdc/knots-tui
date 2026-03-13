@@ -65,7 +65,7 @@ async fn main() -> anyhow::Result<()> {
 
     let client = RpcClient::new(&args.rpc_url, &cookie);
 
-    let (tx, mut rx) = mpsc::channel::<NodeData>(2);
+    let (tx, mut rx) = mpsc::channel::<NodeData>(4);
     let current_screen = Arc::new(AtomicU8::new(Screen::Dashboard as u8));
     let poll_notify = Arc::new(Notify::new());
 
@@ -84,7 +84,7 @@ async fn main() -> anyhow::Result<()> {
                 Screen::KnownPeers => poll_client.fetch_known_peers().await,
                 Screen::Signaling => {
                     poll_progress.store(0, Ordering::Relaxed);
-                    poll_client.fetch_signaling(&poll_progress).await
+                    poll_client.fetch_signaling(&poll_progress, &tx).await
                 }
             };
             match result {
@@ -130,10 +130,11 @@ async fn main() -> anyhow::Result<()> {
 
     loop {
         while let Ok(data) = rx.try_recv() {
-            if screen == Screen::Signaling && !data.recent_block_versions.is_empty() {
+            if !data.recent_block_versions.is_empty() {
                 signaling_loaded = true;
                 signaling_data = data.clone();
             }
+            // Always update node_data for non-signaling screens
             node_data = data;
             rpc_active_until = Instant::now() + Duration::from_millis(500);
         }

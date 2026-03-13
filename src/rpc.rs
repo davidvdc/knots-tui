@@ -460,7 +460,11 @@ impl RpcClient {
         })
     }
 
-    pub async fn fetch_signaling(&self, progress: &Arc<AtomicU16>) -> Result<NodeData, String> {
+    pub async fn fetch_signaling(
+        &self,
+        progress: &Arc<AtomicU16>,
+        partial_tx: &tokio::sync::mpsc::Sender<NodeData>,
+    ) -> Result<NodeData, String> {
         let now = chrono::Utc::now().timestamp() as u64;
 
         let batch_results = self
@@ -478,10 +482,12 @@ impl RpcClient {
         let uptime: u64 =
             serde_json::from_value(batch_results[2].clone()).map_err(|e| e.to_string())?;
 
+        let softforks = blockchain.softforks.clone();
+
         // Fetch last 2016 blocks (~1 retarget period) to scan version bits
         let mut recent_block_versions = Vec::new();
         let mut block_hash = blockchain.bestblockhash.clone();
-        for _ in 0..2016 {
+        for i in 0..2016u16 {
             if block_hash.is_empty() {
                 break;
             }
@@ -495,9 +501,22 @@ impl RpcClient {
             recent_block_versions.push((height, version));
             progress.store(recent_block_versions.len() as u16, Ordering::Relaxed);
             block_hash = prev;
-        }
 
-        let softforks = blockchain.softforks.clone();
+            // Send partial update every 100 blocks
+            if (i + 1) % 100 == 0 {
+                let _ = partial_tx
+                    .try_send(NodeData {
+                        error: None,
+                        blockchain: blockchain.clone(),
+                        network: network.clone(),
+                        uptime,
+                        fetched_at: now,
+                        softforks: softforks.clone(),
+                        recent_block_versions: recent_block_versions.clone(),
+                        ..Default::default()
+                    });
+            }
+        }
 
         Ok(NodeData {
             error: None,
