@@ -3,7 +3,7 @@ use crate::Screen;
 use ratatui::{prelude::*, widgets::*};
 use std::collections::BTreeMap;
 
-pub fn draw(f: &mut Frame, data: &NodeData, peer_scroll: u16, block_scroll: u16, screen: Screen, selected_bit: u8, show_bit_modal: bool, signaling_loaded: bool, signaling_progress: u16, rpc_active: bool) {
+pub fn draw(f: &mut Frame, data: &NodeData, peer_scroll: u16, block_scroll: u16, screen: Screen, selected_bit: u8, show_bit_modal: bool, rpc_active: bool) {
     let area = f.area();
 
     let outer = Layout::default()
@@ -19,7 +19,7 @@ pub fn draw(f: &mut Frame, data: &NodeData, peer_scroll: u16, block_scroll: u16,
     match screen {
         Screen::Dashboard => draw_body(f, outer[1], data, peer_scroll, block_scroll),
         Screen::KnownPeers => draw_known_peers(f, outer[1], data, peer_scroll),
-        Screen::Signaling => draw_signaling(f, outer[1], data, selected_bit, signaling_loaded, signaling_progress),
+        Screen::Signaling => draw_signaling(f, outer[1], data, selected_bit),
     }
     draw_footer(f, outer[2], screen, rpc_active);
 
@@ -811,16 +811,7 @@ fn draw_known_peers_services(f: &mut Frame, area: Rect, data: &NodeData, scroll:
     f.render_stateful_widget(table, area, &mut state);
 }
 
-fn draw_signaling(f: &mut Frame, area: Rect, data: &NodeData, selected_bit: u8, signaling_loaded: bool, progress: u16) {
-    if !signaling_loaded {
-        if progress > 0 {
-            draw_signaling_loading(f, area, progress);
-        } else {
-            draw_signaling_prompt(f, area);
-        }
-        return;
-    }
-
+fn draw_signaling(f: &mut Frame, area: Rect, data: &NodeData, selected_bit: u8) {
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -831,83 +822,6 @@ fn draw_signaling(f: &mut Frame, area: Rect, data: &NodeData, selected_bit: u8, 
 
     draw_version_bits(f, layout[0], data, selected_bit);
     draw_softforks(f, layout[1], data);
-}
-
-fn draw_signaling_loading(f: &mut Frame, area: Rect, progress: u16) {
-    let modal_width = 50u16;
-    let modal_height = 7u16;
-    let x = (area.width.saturating_sub(modal_width)) / 2 + area.x;
-    let y = (area.height.saturating_sub(modal_height)) / 2 + area.y;
-    let modal_area = Rect::new(x, y, modal_width, modal_height);
-
-    let pct = (progress as f64 / 2016.0) * 100.0;
-    let bar_width = (modal_width - 4) as usize;
-    let filled = ((pct / 100.0) * bar_width as f64) as usize;
-    let empty = bar_width.saturating_sub(filled);
-    let bar = format!("[{}{}]", "█".repeat(filled), "░".repeat(empty));
-
-    let text = vec![
-        Line::from(""),
-        Line::from(Span::styled(
-            format!("Fetching blocks... {}/{}", progress, 2016),
-            Style::default().fg(Color::Yellow).bold(),
-        )),
-        Line::from(""),
-        Line::from(Span::styled(bar, Style::default().fg(Color::Cyan))),
-        Line::from(Span::styled(
-            format!("{:.0}%", pct),
-            Style::default().fg(Color::White),
-        )),
-    ];
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .title(" Signaling ")
-        .title_style(Style::default().fg(Color::Cyan).bold());
-
-    let paragraph = Paragraph::new(text)
-        .block(block)
-        .alignment(Alignment::Center);
-
-    f.render_widget(paragraph, modal_area);
-}
-
-fn draw_signaling_prompt(f: &mut Frame, area: Rect) {
-    let modal_width = 50u16;
-    let modal_height = 7u16;
-    let x = (area.width.saturating_sub(modal_width)) / 2 + area.x;
-    let y = (area.height.saturating_sub(modal_height)) / 2 + area.y;
-    let modal_area = Rect::new(x, y, modal_width, modal_height);
-
-    let text = vec![
-        Line::from(""),
-        Line::from(Span::styled(
-            "Signaling data not loaded",
-            Style::default().fg(Color::Yellow).bold(),
-        )),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Press  r  to fetch 2,016 blocks",
-            Style::default().fg(Color::White),
-        )),
-        Line::from(Span::styled(
-            "(~1 retarget period, may take 15-30s)",
-            Style::default().fg(Color::DarkGray),
-        )),
-    ];
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .title(" Signaling ")
-        .title_style(Style::default().fg(Color::Cyan).bold());
-
-    let paragraph = Paragraph::new(text)
-        .block(block)
-        .alignment(Alignment::Center);
-
-    f.render_widget(paragraph, modal_area);
 }
 
 fn known_buried_softforks() -> BTreeMap<String, crate::rpc::SoftFork> {

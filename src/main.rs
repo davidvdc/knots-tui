@@ -121,7 +121,7 @@ async fn main() -> anyhow::Result<()> {
         loop {
             sig_wake.notified().await;
             sig_progress.store(0, Ordering::Relaxed);
-            let result = sig_client.fetch_signaling(&sig_progress, &sig_tx).await;
+            let result = sig_client.fetch_signaling(&sig_progress).await;
             match result {
                 Ok(data) => {
                     let _ = sig_tx.send(data).await;
@@ -151,29 +151,25 @@ async fn main() -> anyhow::Result<()> {
     let mut screen = Screen::Dashboard;
     let mut selected_bit: u8 = 0;
     let mut show_bit_modal = false;
-    let mut signaling_loaded = false;
     let mut rpc_active_until = Instant::now();
 
     loop {
         while let Ok(data) = rx.try_recv() {
             if !data.recent_block_versions.is_empty() {
-                signaling_loaded = true;
                 signaling_data = data.clone();
             }
-            // Always update node_data for non-signaling screens
             node_data = data;
             rpc_active_until = Instant::now() + Duration::from_millis(500);
         }
 
         if last_render.elapsed() >= Duration::from_millis(100) {
-            let sig_progress = signaling_progress.load(Ordering::Relaxed);
-            let rpc_active = Instant::now() < rpc_active_until || (screen == Screen::Signaling && !signaling_loaded && sig_progress > 0);
-            let draw_data = if screen == Screen::Signaling && signaling_loaded {
+            let rpc_active = Instant::now() < rpc_active_until || signaling_progress.load(Ordering::Relaxed) > 0 && signaling_progress.load(Ordering::Relaxed) < 2016;
+            let draw_data = if screen == Screen::Signaling {
                 &signaling_data
             } else {
                 &node_data
             };
-            terminal.draw(|f| ui::draw(f, draw_data, peer_scroll, block_scroll, screen, selected_bit, show_bit_modal, signaling_loaded, sig_progress, rpc_active))?;
+            terminal.draw(|f| ui::draw(f, draw_data, peer_scroll, block_scroll, screen, selected_bit, show_bit_modal, rpc_active))?;
             last_render = Instant::now();
         }
 
@@ -197,7 +193,9 @@ async fn main() -> anyhow::Result<()> {
                                     Screen::Signaling => Screen::Dashboard,
                                 };
                                 current_screen.store(screen as u8, Ordering::Relaxed);
-                                // Wake the main poll loop for Dashboard/KnownPeers
+                                if screen == Screen::Signaling {
+                                    signaling_notify.notify_one();
+                                }
                                 poll_notify.notify_one();
                             }
                             KeyCode::Down | KeyCode::Char('j') => {

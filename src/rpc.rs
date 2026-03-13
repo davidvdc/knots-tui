@@ -362,6 +362,7 @@ impl RpcClient {
                 ("getpeerinfo", json!([])),
                 ("getnettotals", json!([])),
                 ("uptime", json!([])),
+                ("getnodeaddresses", json!([0])),
             ])
             .await?;
 
@@ -379,6 +380,10 @@ impl RpcClient {
             serde_json::from_value(batch_results[5].clone()).map_err(|e| e.to_string())?;
         let uptime: u64 =
             serde_json::from_value(batch_results[6].clone()).map_err(|e| e.to_string())?;
+        let known_peers = batch_results[7]
+            .as_array()
+            .map(|a| a.len() as u64)
+            .unwrap_or(0);
 
         // Fetch recent blocks (last 8)
         let mut recent_blocks = Vec::new();
@@ -422,6 +427,7 @@ impl RpcClient {
             uptime,
             recent_blocks,
             fetched_at: now,
+            known_peers,
             ..Default::default()
         })
     }
@@ -463,7 +469,6 @@ impl RpcClient {
     pub async fn fetch_signaling(
         &self,
         progress: &Arc<AtomicU16>,
-        partial_tx: &tokio::sync::mpsc::Sender<NodeData>,
     ) -> Result<NodeData, String> {
         let now = chrono::Utc::now().timestamp() as u64;
 
@@ -526,19 +531,6 @@ impl RpcClient {
             }
 
             progress.store(recent_block_versions.len() as u16, Ordering::Relaxed);
-
-            // Send partial update after each batch
-            let _ = partial_tx
-                .try_send(NodeData {
-                    error: None,
-                    blockchain: blockchain.clone(),
-                    network: network.clone(),
-                    uptime,
-                    fetched_at: now,
-                    softforks: softforks.clone(),
-                    recent_block_versions: recent_block_versions.clone(),
-                    ..Default::default()
-                });
 
             current_height = current_height.saturating_sub(chunk as u64);
             remaining -= chunk;
