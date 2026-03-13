@@ -12,7 +12,7 @@ use std::io::stdout;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Notify};
 
 use rpc::{NodeData, RpcClient};
 
@@ -65,9 +65,11 @@ async fn main() -> anyhow::Result<()> {
 
     let (tx, mut rx) = mpsc::channel::<NodeData>(2);
     let current_screen = Arc::new(AtomicU8::new(Screen::Dashboard as u8));
+    let poll_notify = Arc::new(Notify::new());
 
     let poll_client = client.clone();
     let poll_screen = current_screen.clone();
+    let poll_wake = poll_notify.clone();
     let interval = Duration::from_secs(args.interval);
     tokio::spawn(async move {
         loop {
@@ -89,7 +91,10 @@ async fn main() -> anyhow::Result<()> {
                         .await;
                 }
             }
-            tokio::time::sleep(interval).await;
+            tokio::select! {
+                _ = tokio::time::sleep(interval) => {}
+                _ = poll_wake.notified() => {}
+            }
         }
     });
 
@@ -125,6 +130,7 @@ async fn main() -> anyhow::Result<()> {
                                 Screen::KnownPeers => Screen::Dashboard,
                             };
                             current_screen.store(screen as u8, Ordering::Relaxed);
+                            poll_notify.notify_one();
                         }
                         KeyCode::Down | KeyCode::Char('j') => {
                             peer_scroll = peer_scroll.saturating_add(1);
