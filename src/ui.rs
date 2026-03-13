@@ -844,10 +844,27 @@ fn draw_softforks(f: &mut Frame, area: Rect, data: &NodeData) {
         .style(Style::default().fg(Color::Cyan).bold())
         .bottom_margin(0);
 
-    let rows: Vec<Row> = data
-        .softforks
+    // Sort: BIP9 (non-buried) first, then buried by height descending (newest first)
+    let mut sorted: Vec<(&String, &crate::rpc::SoftFork)> = data.softforks.iter().collect();
+    sorted.sort_by(|(_, a), (_, b)| {
+        let a_buried = a.fork_type == "buried";
+        let b_buried = b.fork_type == "buried";
+        match (a_buried, b_buried) {
+            (false, true) => std::cmp::Ordering::Less,
+            (true, false) => std::cmp::Ordering::Greater,
+            _ => {
+                // Within same type, sort by height descending (newest first)
+                let ah = a.height.unwrap_or(i64::MAX);
+                let bh = b.height.unwrap_or(i64::MAX);
+                bh.cmp(&ah)
+            }
+        }
+    });
+
+    let rows: Vec<Row> = sorted
         .iter()
         .map(|(name, fork)| {
+            let is_buried = fork.fork_type == "buried";
             let active_str = if fork.active { "yes" } else { "no" };
 
             let height_str = fork
@@ -878,10 +895,16 @@ fn draw_softforks(f: &mut Frame, area: Rect, data: &NodeData) {
 
                 (bip9.status.clone(), bit_str, progress)
             } else {
-                ("-".to_string(), "-".to_string(), "-".to_string())
+                (
+                    if is_buried { "buried".to_string() } else { "-".to_string() },
+                    "-".to_string(),
+                    "-".to_string(),
+                )
             };
 
-            let color = if fork.active {
+            let color = if is_buried {
+                Color::DarkGray
+            } else if fork.active {
                 Color::Green
             } else {
                 match status.as_str() {
@@ -894,7 +917,7 @@ fn draw_softforks(f: &mut Frame, area: Rect, data: &NodeData) {
             };
 
             Row::new(vec![
-                name.clone(),
+                (*name).clone(),
                 fork.fork_type.clone(),
                 active_str.to_string(),
                 height_str,
