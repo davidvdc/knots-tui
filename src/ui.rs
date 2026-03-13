@@ -525,11 +525,14 @@ fn draw_known_peers(f: &mut Frame, area: Rect, data: &NodeData) {
     let now = data.fetched_at;
 
     // Time buckets
-    let bucket_labels = ["<1h", "1-6h", "6-24h", "1-7d", "7-30d", ">30d"];
-    let bucket_thresholds: [u64; 6] = [3600, 21600, 86400, 604800, 2592000, u64::MAX];
+    let bucket_labels = ["1d", "2d", "3d", "4d", "5d", "6d", "7d", "7-14d", "14-30d", "30d+"];
+    let day: u64 = 86400;
+    let bucket_thresholds: [u64; 10] = [
+        day, 2*day, 3*day, 4*day, 5*day, 6*day, 7*day, 14*day, 30*day, u64::MAX,
+    ];
 
     // Group by network type, then bucket by last-seen age
-    let mut network_buckets: BTreeMap<String, [u64; 6]> = BTreeMap::new();
+    let mut network_buckets: BTreeMap<String, [u64; 10]> = BTreeMap::new();
 
     for addr in &data.known_addresses {
         let net = if addr.network.is_empty() {
@@ -541,14 +544,14 @@ fn draw_known_peers(f: &mut Frame, area: Rect, data: &NodeData) {
         let bucket_idx = bucket_thresholds
             .iter()
             .position(|&t| age < t)
-            .unwrap_or(5);
+            .unwrap_or(9);
 
-        let buckets = network_buckets.entry(net).or_insert([0; 6]);
+        let buckets = network_buckets.entry(net).or_insert([0; 10]);
         buckets[bucket_idx] += 1;
     }
 
     // Build totals row
-    let mut totals = [0u64; 6];
+    let mut totals = [0u64; 10];
     for buckets in network_buckets.values() {
         for (i, &count) in buckets.iter().enumerate() {
             totals[i] += count;
@@ -602,12 +605,16 @@ fn draw_known_peers(f: &mut Frame, area: Rect, data: &NodeData) {
 
     let widths = [
         Constraint::Length(10),
-        Constraint::Length(8),
-        Constraint::Length(8),
-        Constraint::Length(8),
-        Constraint::Length(8),
-        Constraint::Length(8),
-        Constraint::Length(8),
+        Constraint::Length(7),
+        Constraint::Length(7),
+        Constraint::Length(7),
+        Constraint::Length(7),
+        Constraint::Length(7),
+        Constraint::Length(7),
+        Constraint::Length(7),
+        Constraint::Length(7),
+        Constraint::Length(7),
+        Constraint::Length(7),
         Constraint::Length(10),
     ];
 

@@ -380,22 +380,26 @@ impl RpcClient {
 
         let batch_results = self
             .batch_call(&[
+                ("getblockchaininfo", json!([])),
                 ("getnetworkinfo", json!([])),
                 ("uptime", json!([])),
                 ("getnodeaddresses", json!([0])),
             ])
             .await?;
 
-        let network: NetworkInfo =
+        let blockchain: BlockchainInfo =
             serde_json::from_value(batch_results[0].clone()).map_err(|e| e.to_string())?;
-        let uptime: u64 =
+        let network: NetworkInfo =
             serde_json::from_value(batch_results[1].clone()).map_err(|e| e.to_string())?;
+        let uptime: u64 =
+            serde_json::from_value(batch_results[2].clone()).map_err(|e| e.to_string())?;
         let known_addresses: Vec<KnownAddress> =
-            serde_json::from_value(batch_results[2].clone()).unwrap_or_default();
+            serde_json::from_value(batch_results[3].clone()).unwrap_or_default();
         let known_peers = known_addresses.len() as u64;
 
         Ok(NodeData {
             error: None,
+            blockchain,
             network,
             uptime,
             fetched_at: now,
