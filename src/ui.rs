@@ -19,6 +19,7 @@ pub fn draw(f: &mut Frame, data: &NodeData, peer_scroll: u16, block_scroll: u16,
     match screen {
         Screen::Dashboard => draw_body(f, outer[1], data, peer_scroll, block_scroll),
         Screen::KnownPeers => draw_known_peers(f, outer[1], data),
+        Screen::Signaling => draw_signaling(f, outer[1], data),
     }
     draw_footer(f, outer[2], screen);
 }
@@ -41,6 +42,7 @@ fn draw_header(f: &mut Frame, area: Rect, data: &NodeData, screen: Screen) {
     let screen_label = match screen {
         Screen::Dashboard => "Dashboard",
         Screen::KnownPeers => "Known Peers",
+        Screen::Signaling => "Signaling",
     };
 
     let title = format!(
@@ -758,10 +760,207 @@ fn draw_known_peers_services(f: &mut Frame, area: Rect, data: &NodeData) {
     f.render_widget(table, area);
 }
 
+fn draw_signaling(f: &mut Frame, area: Rect, data: &NodeData) {
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Min(6),    // softforks table
+            Constraint::Length(12), // version bits from recent blocks
+        ])
+        .split(area);
+
+    draw_softforks(f, layout[0], data);
+    draw_version_bits(f, layout[1], data);
+}
+
+fn draw_softforks(f: &mut Frame, area: Rect, data: &NodeData) {
+    let header = Row::new(vec![
+        "Name", "Type", "Active", "Status", "Bit", "Period", "Threshold", "Elapsed", "Count", "Possible",
+    ])
+        .style(Style::default().fg(Color::Cyan).bold())
+        .bottom_margin(0);
+
+    let rows: Vec<Row> = data
+        .softforks
+        .iter()
+        .map(|(name, fork)| {
+            let active_str = if fork.active { "yes" } else { "no" };
+            let active_color = if fork.active { Color::Green } else { Color::DarkGray };
+
+            let (status, bit, period, threshold, elapsed, count, possible) =
+                if let Some(ref bip9) = fork.bip9 {
+                    let bit_str = bip9
+                        .bit
+                        .map(|b| b.to_string())
+                        .unwrap_or_else(|| "-".to_string());
+
+                    let (period, threshold, elapsed, count, possible) =
+                        if let Some(ref stats) = bip9.statistics {
+                            (
+                                format_number(stats.period),
+                                format_number(stats.threshold),
+                                format_number(stats.elapsed),
+                                format_number(stats.count),
+                                if stats.possible { "yes" } else { "no" },
+                            )
+                        } else {
+                            ("-".to_string(), "-".to_string(), "-".to_string(), "-".to_string(), "-")
+                        };
+
+                    (bip9.status.clone(), bit_str, period, threshold, elapsed, count, possible)
+                } else {
+                    ("-".to_string(), "-".to_string(), "-".to_string(), "-".to_string(), "-".to_string(), "-".to_string(), "-")
+                };
+
+            let status_color = match status.as_str() {
+                "active" => Color::Green,
+                "started" => Color::Yellow,
+                "locked_in" => Color::Cyan,
+                "defined" => Color::DarkGray,
+                "failed" => Color::Red,
+                _ => Color::White,
+            };
+
+            Row::new(vec![
+                name.clone(),
+                fork.fork_type.clone(),
+                active_str.to_string(),
+                status.clone(),
+                bit,
+                period,
+                threshold,
+                elapsed,
+                count,
+                possible.to_string(),
+            ])
+            .style(Style::default().fg(if fork.active { active_color } else { status_color }))
+        })
+        .collect();
+
+    let widths = [
+        Constraint::Length(16),
+        Constraint::Length(8),
+        Constraint::Length(7),
+        Constraint::Length(10),
+        Constraint::Length(4),
+        Constraint::Length(8),
+        Constraint::Length(10),
+        Constraint::Length(8),
+        Constraint::Length(8),
+        Constraint::Length(9),
+    ];
+
+    let table = Table::new(rows, widths)
+        .header(header)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .title(format!(
+                    " Softforks ({}) ",
+                    data.softforks.len()
+                ))
+                .title_style(Style::default().fg(Color::Cyan).bold()),
+        );
+
+    f.render_widget(table, area);
+}
+
+fn draw_version_bits(f: &mut Frame, area: Rect, data: &NodeData) {
+    if data.recent_block_versions.is_empty() {
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .title(" Version Bit Signaling (last 144 blocks) ")
+            .title_style(Style::default().fg(Color::Yellow).bold());
+        let p = Paragraph::new("No block data").block(block);
+        f.render_widget(p, area);
+        return;
+    }
+
+    // Find all version bits set across recent blocks (bits 0-28 per BIP9)
+    let mut bit_counts: BTreeMap<u8, u64> = BTreeMap::new();
+    let total_blocks = data.recent_block_versions.len() as u64;
+
+    for &(_height, version) in &data.recent_block_versions {
+        // BIP9 version bits are bits 0-28 when top 3 bits = 001 (version >= 0x20000000)
+        if version >= 0x20000000 {
+            for bit in 0..29u8 {
+                if version & (1i64 << bit) != 0 {
+                    *bit_counts.entry(bit).or_insert(0) += 1;
+                }
+            }
+        }
+    }
+
+    // Build bit name lookup from softforks
+    let mut bit_names: BTreeMap<u8, String> = BTreeMap::new();
+    for (name, fork) in &data.softforks {
+        if let Some(ref bip9) = fork.bip9 {
+            if let Some(bit) = bip9.bit {
+                bit_names.insert(bit, name.clone());
+            }
+        }
+    }
+
+    let header = Row::new(vec!["Bit", "Name", "Signaling", "Pct"])
+        .style(Style::default().fg(Color::Cyan).bold())
+        .bottom_margin(0);
+
+    let rows: Vec<Row> = bit_counts
+        .iter()
+        .map(|(&bit, &count)| {
+            let name = bit_names
+                .get(&bit)
+                .cloned()
+                .unwrap_or_else(|| format!("unknown (bit {})", bit));
+            let pct = (count as f64 / total_blocks as f64) * 100.0;
+            let color = if pct >= 95.0 {
+                Color::Green
+            } else if pct >= 50.0 {
+                Color::Yellow
+            } else {
+                Color::White
+            };
+
+            Row::new(vec![
+                bit.to_string(),
+                name,
+                format!("{}/{}", format_number(count), format_number(total_blocks)),
+                format!("{:.1}%", pct),
+            ])
+            .style(Style::default().fg(color))
+        })
+        .collect();
+
+    let widths = [
+        Constraint::Length(4),
+        Constraint::Length(20),
+        Constraint::Length(12),
+        Constraint::Length(8),
+    ];
+
+    let table = Table::new(rows, widths)
+        .header(header)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .title(format!(
+                    " Version Bit Signaling (last {} blocks) ",
+                    total_blocks
+                ))
+                .title_style(Style::default().fg(Color::Yellow).bold()),
+        );
+
+    f.render_widget(table, area);
+}
+
 fn draw_footer(f: &mut Frame, area: Rect, screen: Screen) {
     let text = match screen {
         Screen::Dashboard => " q: quit | Tab: known peers | j/k: scroll peers | J/K: scroll blocks ",
-        Screen::KnownPeers => " q: quit | Tab: dashboard ",
+        Screen::KnownPeers => " q: quit | Tab: signaling ",
+        Screen::Signaling => " q: quit | Tab: dashboard ",
     };
     let footer = Paragraph::new(text)
         .style(Style::default().fg(Color::DarkGray))

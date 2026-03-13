@@ -20,12 +20,14 @@ use rpc::{NodeData, RpcClient};
 pub enum Screen {
     Dashboard = 0,
     KnownPeers = 1,
+    Signaling = 2,
 }
 
 impl Screen {
     fn from_u8(v: u8) -> Self {
         match v {
             1 => Screen::KnownPeers,
+            2 => Screen::Signaling,
             _ => Screen::Dashboard,
         }
     }
@@ -77,6 +79,7 @@ async fn main() -> anyhow::Result<()> {
             let result = match screen {
                 Screen::Dashboard => poll_client.fetch_dashboard().await,
                 Screen::KnownPeers => poll_client.fetch_known_peers().await,
+                Screen::Signaling => poll_client.fetch_signaling().await,
             };
             match result {
                 Ok(data) => {
@@ -127,7 +130,8 @@ async fn main() -> anyhow::Result<()> {
                         KeyCode::Tab => {
                             screen = match screen {
                                 Screen::Dashboard => Screen::KnownPeers,
-                                Screen::KnownPeers => Screen::Dashboard,
+                                Screen::KnownPeers => Screen::Signaling,
+                                Screen::Signaling => Screen::Dashboard,
                             };
                             current_screen.store(screen as u8, Ordering::Relaxed);
                             poll_notify.notify_one();

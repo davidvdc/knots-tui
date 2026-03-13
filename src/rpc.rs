@@ -2,6 +2,7 @@ use base64::Engine;
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 
 #[derive(Clone)]
 pub struct RpcClient {
@@ -24,6 +25,8 @@ pub struct NodeData {
     pub fetched_at: u64,
     pub known_peers: u64,
     pub known_addresses: Vec<KnownAddress>,
+    pub softforks: BTreeMap<String, SoftFork>,
+    pub recent_block_versions: Vec<(u64, i64)>, // (height, version)
 }
 
 #[derive(Default, Clone, Debug, Deserialize)]
@@ -66,6 +69,50 @@ pub struct BlockchainInfo {
     pub pruned: bool,
     #[serde(default)]
     pub warnings: WarningsField,
+    #[serde(default)]
+    pub softforks: BTreeMap<String, SoftFork>,
+}
+
+#[derive(Default, Clone, Debug, Deserialize)]
+pub struct SoftFork {
+    #[serde(default, rename = "type")]
+    pub fork_type: String,
+    #[serde(default)]
+    pub bip9: Option<Bip9Info>,
+    #[serde(default)]
+    pub height: Option<i64>,
+    #[serde(default)]
+    pub active: bool,
+}
+
+#[derive(Default, Clone, Debug, Deserialize)]
+pub struct Bip9Info {
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub bit: Option<u8>,
+    #[serde(default)]
+    pub start_time: i64,
+    #[serde(default)]
+    pub timeout: i64,
+    #[serde(default)]
+    pub since: u64,
+    #[serde(default)]
+    pub statistics: Option<Bip9Statistics>,
+}
+
+#[derive(Default, Clone, Debug, Deserialize)]
+pub struct Bip9Statistics {
+    #[serde(default)]
+    pub period: u64,
+    #[serde(default)]
+    pub threshold: u64,
+    #[serde(default)]
+    pub elapsed: u64,
+    #[serde(default)]
+    pub count: u64,
+    #[serde(default)]
+    pub possible: bool,
 }
 
 #[derive(Default, Clone, Debug, Deserialize)]
@@ -405,6 +452,56 @@ impl RpcClient {
             fetched_at: now,
             known_peers,
             known_addresses,
+            ..Default::default()
+        })
+    }
+
+    pub async fn fetch_signaling(&self) -> Result<NodeData, String> {
+        let now = chrono::Utc::now().timestamp() as u64;
+
+        let batch_results = self
+            .batch_call(&[
+                ("getblockchaininfo", json!([])),
+                ("getnetworkinfo", json!([])),
+                ("uptime", json!([])),
+            ])
+            .await?;
+
+        let blockchain: BlockchainInfo =
+            serde_json::from_value(batch_results[0].clone()).map_err(|e| e.to_string())?;
+        let network: NetworkInfo =
+            serde_json::from_value(batch_results[1].clone()).map_err(|e| e.to_string())?;
+        let uptime: u64 =
+            serde_json::from_value(batch_results[2].clone()).map_err(|e| e.to_string())?;
+
+        // Fetch last 144 blocks (~1 day) to scan version bits
+        let mut recent_block_versions = Vec::new();
+        let mut block_hash = blockchain.bestblockhash.clone();
+        for _ in 0..144 {
+            if block_hash.is_empty() {
+                break;
+            }
+            let block_val = self.call("getblock", json!([block_hash, 1])).await?;
+            let height = block_val["height"].as_u64().unwrap_or(0);
+            let version = block_val["version"].as_i64().unwrap_or(0);
+            let prev = block_val["previousblockhash"]
+                .as_str()
+                .unwrap_or("")
+                .to_string();
+            recent_block_versions.push((height, version));
+            block_hash = prev;
+        }
+
+        let softforks = blockchain.softforks.clone();
+
+        Ok(NodeData {
+            error: None,
+            blockchain,
+            network,
+            uptime,
+            fetched_at: now,
+            softforks,
+            recent_block_versions,
             ..Default::default()
         })
     }
