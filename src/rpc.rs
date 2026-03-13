@@ -484,38 +484,64 @@ impl RpcClient {
 
         let softforks = blockchain.softforks.clone();
 
-        // Fetch last 2016 blocks (~1 retarget period) to scan version bits
+        // Fetch last 2016 block headers using batched RPC calls
+        let tip_height = blockchain.blocks;
+        let batch_size = 100usize;
+        let total_blocks = 2016u64.min(tip_height);
         let mut recent_block_versions = Vec::new();
-        let mut block_hash = blockchain.bestblockhash.clone();
-        for i in 0..2016u16 {
-            if block_hash.is_empty() {
-                break;
-            }
-            let block_val = self.call("getblock", json!([block_hash, 1])).await?;
-            let height = block_val["height"].as_u64().unwrap_or(0);
-            let version = block_val["version"].as_i64().unwrap_or(0);
-            let prev = block_val["previousblockhash"]
-                .as_str()
-                .unwrap_or("")
-                .to_string();
-            recent_block_versions.push((height, version));
-            progress.store(recent_block_versions.len() as u16, Ordering::Relaxed);
-            block_hash = prev;
 
-            // Send partial update every 100 blocks
-            if (i + 1) % 100 == 0 {
-                let _ = partial_tx
-                    .try_send(NodeData {
-                        error: None,
-                        blockchain: blockchain.clone(),
-                        network: network.clone(),
-                        uptime,
-                        fetched_at: now,
-                        softforks: softforks.clone(),
-                        recent_block_versions: recent_block_versions.clone(),
-                        ..Default::default()
-                    });
+        // Process in chunks: batch getblockhash, then batch getblockheader
+        let mut remaining = total_blocks as usize;
+        let mut current_height = tip_height;
+
+        while remaining > 0 {
+            let chunk = remaining.min(batch_size);
+            let heights: Vec<u64> = (0..chunk)
+                .map(|i| current_height - i as u64)
+                .collect();
+
+            // Batch getblockhash for all heights in this chunk
+            let hash_calls: Vec<(&str, Value)> = heights
+                .iter()
+                .map(|&h| ("getblockhash", json!([h])))
+                .collect();
+            let hash_results = self.batch_call(&hash_calls).await?;
+
+            let hashes: Vec<String> = hash_results
+                .iter()
+                .map(|v| v.as_str().unwrap_or("").to_string())
+                .collect();
+
+            // Batch getblockheader for all hashes
+            let header_calls: Vec<(&str, Value)> = hashes
+                .iter()
+                .map(|h| ("getblockheader", json!([h, true])))
+                .collect();
+            let header_results = self.batch_call(&header_calls).await?;
+
+            for (i, header_val) in header_results.iter().enumerate() {
+                let height = heights[i];
+                let version = header_val["version"].as_i64().unwrap_or(0);
+                recent_block_versions.push((height, version));
             }
+
+            progress.store(recent_block_versions.len() as u16, Ordering::Relaxed);
+
+            // Send partial update after each batch
+            let _ = partial_tx
+                .try_send(NodeData {
+                    error: None,
+                    blockchain: blockchain.clone(),
+                    network: network.clone(),
+                    uptime,
+                    fetched_at: now,
+                    softforks: softforks.clone(),
+                    recent_block_versions: recent_block_versions.clone(),
+                    ..Default::default()
+                });
+
+            current_height = current_height.saturating_sub(chunk as u64);
+            remaining -= chunk;
         }
 
         Ok(NodeData {
