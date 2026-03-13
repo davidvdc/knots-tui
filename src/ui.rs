@@ -71,7 +71,7 @@ fn draw_body(f: &mut Frame, area: Rect, data: &NodeData, peer_scroll: u16, block
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(12), // top info cards
+            Constraint::Length(9), // top info cards
             Constraint::Min(8),    // bottom tables
         ])
         .split(area);
@@ -381,8 +381,8 @@ fn draw_mining_card(f: &mut Frame, area: Rect, data: &NodeData) {
 
 fn draw_peers_table(f: &mut Frame, area: Rect, data: &NodeData, scroll: u16) {
     let header = Row::new(vec![
-        "ID", "Address", "Client", "Type", "Relay", "Dir", "Height",
-        "Ping", "Uptime", "Ago", "Sent", "Recv",
+        "ID", "Address", "Client", "Type", "TX", "Dir", "Height",
+        "Ping", "Conn", "Sent", "Recv",
     ])
         .style(Style::default().fg(Color::Cyan).bold())
         .bottom_margin(0);
@@ -407,20 +407,6 @@ fn draw_peers_table(f: &mut Frame, area: Rect, data: &NodeData, scroll: u16) {
                 "-".to_string()
             };
 
-            let last_activity = {
-                let most_recent = p.lastsend.max(p.lastrecv);
-                if most_recent > 0 && now > most_recent {
-                    let secs = now - most_recent;
-                    if secs > 99 {
-                        format!("{}", secs)
-                    } else {
-                        format!("{}s", secs)
-                    }
-                } else {
-                    "-".to_string()
-                }
-            };
-
             let relay = if p.relaytxes { "yes" } else { "no" };
 
             Row::new(vec![
@@ -433,7 +419,6 @@ fn draw_peers_table(f: &mut Frame, area: Rect, data: &NodeData, scroll: u16) {
                 p.synced_blocks.to_string(),
                 ping,
                 uptime,
-                last_activity,
                 format_bytes_short(p.bytessent),
                 format_bytes_short(p.bytesrecv),
             ])
@@ -450,12 +435,11 @@ fn draw_peers_table(f: &mut Frame, area: Rect, data: &NodeData, scroll: u16) {
         Constraint::Min(18),
         Constraint::Min(30),
         Constraint::Length(19),
-        Constraint::Length(5),
+        Constraint::Length(3),
         Constraint::Length(4),
         Constraint::Length(8),
         Constraint::Length(7),
         Constraint::Length(12),
-        Constraint::Length(3),
         Constraint::Length(8),
         Constraint::Length(8),
     ];
