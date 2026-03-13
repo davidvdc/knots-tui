@@ -797,16 +797,7 @@ fn draw_known_peers_services(f: &mut Frame, area: Rect, data: &NodeData, scroll:
     widths.push(Constraint::Length(14));
     widths.push(Constraint::Min(24));
 
-    // Split area: scrollable table on top, static totals footer at bottom
-    let split = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Min(4),    // scrollable service rows
-            Constraint::Length(3), // footer table (1 row + borders)
-        ])
-        .split(area);
-
-    let table = Table::new(rows, widths.clone())
+    let table = Table::new(rows, widths)
         .header(header)
         .block(
             Block::default()
@@ -817,27 +808,7 @@ fn draw_known_peers_services(f: &mut Frame, area: Rect, data: &NodeData, scroll:
         );
 
     let mut state = TableState::default().with_offset(scroll as usize);
-    f.render_stateful_widget(table, split[0], &mut state);
-
-    // Static totals footer as a table with matching column widths
-    let mut total_cells = vec!["TOTAL".to_string()];
-    for net in &networks {
-        let (net_total, _) = &by_network[net];
-        total_cells.push(format_number(*net_total));
-    }
-    total_cells.push(format_number(grand_total));
-    total_cells.push(String::new());
-    let total_row = Row::new(total_cells)
-        .style(Style::default().fg(Color::White).bold());
-
-    let footer_table = Table::new(vec![total_row], widths)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_type(BorderType::Rounded),
-        );
-
-    f.render_widget(footer_table, split[1]);
+    f.render_stateful_widget(table, area, &mut state);
 }
 
 fn draw_signaling(f: &mut Frame, area: Rect, data: &NodeData, selected_bit: u8, signaling_loaded: bool, progress: u16) {
