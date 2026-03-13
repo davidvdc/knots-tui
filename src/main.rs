@@ -111,6 +111,8 @@ async fn main() -> anyhow::Result<()> {
     let mut peer_scroll: u16 = 0;
     let mut block_scroll: u16 = 0;
     let mut screen = Screen::Dashboard;
+    let mut selected_bit: u8 = 0;
+    let mut show_bit_modal = false;
 
     loop {
         while let Ok(data) = rx.try_recv() {
@@ -118,44 +120,73 @@ async fn main() -> anyhow::Result<()> {
         }
 
         if last_render.elapsed() >= Duration::from_millis(100) {
-            terminal.draw(|f| ui::draw(f, &node_data, peer_scroll, block_scroll, screen))?;
+            terminal.draw(|f| ui::draw(f, &node_data, peer_scroll, block_scroll, screen, selected_bit, show_bit_modal))?;
             last_render = Instant::now();
         }
 
         if event::poll(Duration::from_millis(50))? {
             if let Event::Key(key) = event::read()? {
                 if key.kind == KeyEventKind::Press {
-                    match key.code {
-                        KeyCode::Char('q') | KeyCode::Esc => break,
-                        KeyCode::Tab => {
-                            screen = match screen {
-                                Screen::Dashboard => Screen::KnownPeers,
-                                Screen::KnownPeers => Screen::Signaling,
-                                Screen::Signaling => Screen::Dashboard,
-                            };
-                            current_screen.store(screen as u8, Ordering::Relaxed);
-                            poll_notify.notify_one();
+                    if show_bit_modal {
+                        match key.code {
+                            KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => {
+                                show_bit_modal = false;
+                            }
+                            _ => {}
                         }
-                        KeyCode::Down | KeyCode::Char('j') => {
-                            peer_scroll = peer_scroll.saturating_add(1);
+                    } else {
+                        match key.code {
+                            KeyCode::Char('q') | KeyCode::Esc => break,
+                            KeyCode::Tab => {
+                                screen = match screen {
+                                    Screen::Dashboard => Screen::KnownPeers,
+                                    Screen::KnownPeers => Screen::Signaling,
+                                    Screen::Signaling => Screen::Dashboard,
+                                };
+                                current_screen.store(screen as u8, Ordering::Relaxed);
+                                poll_notify.notify_one();
+                            }
+                            KeyCode::Down | KeyCode::Char('j') => {
+                                if screen == Screen::Signaling {
+                                    selected_bit = (selected_bit + 1).min(28);
+                                } else {
+                                    peer_scroll = peer_scroll.saturating_add(1);
+                                }
+                            }
+                            KeyCode::Up | KeyCode::Char('k') => {
+                                if screen == Screen::Signaling {
+                                    selected_bit = selected_bit.saturating_sub(1);
+                                } else {
+                                    peer_scroll = peer_scroll.saturating_sub(1);
+                                }
+                            }
+                            KeyCode::Enter => {
+                                if screen == Screen::Signaling {
+                                    show_bit_modal = true;
+                                }
+                            }
+                            KeyCode::Char('J') => {
+                                block_scroll = block_scroll.saturating_add(1);
+                            }
+                            KeyCode::Char('K') => {
+                                block_scroll = block_scroll.saturating_sub(1);
+                            }
+                            _ => {}
                         }
-                        KeyCode::Up | KeyCode::Char('k') => {
-                            peer_scroll = peer_scroll.saturating_sub(1);
-                        }
-                        KeyCode::Char('J') => {
-                            block_scroll = block_scroll.saturating_add(1);
-                        }
-                        KeyCode::Char('K') => {
-                            block_scroll = block_scroll.saturating_sub(1);
-                        }
-                        _ => {}
                     }
                 }
             }
         }
     }
 
+    // Drain any remaining key events so they don't leak to the shell
+    while event::poll(Duration::from_millis(0))? {
+        let _ = event::read();
+    }
+    terminal.clear()?;
     disable_raw_mode()?;
     stdout().execute(LeaveAlternateScreen)?;
+    stdout().execute(crossterm::cursor::Show)?;
+    println!();
     Ok(())
 }

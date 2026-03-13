@@ -3,7 +3,7 @@ use crate::Screen;
 use ratatui::{prelude::*, widgets::*};
 use std::collections::BTreeMap;
 
-pub fn draw(f: &mut Frame, data: &NodeData, peer_scroll: u16, block_scroll: u16, screen: Screen) {
+pub fn draw(f: &mut Frame, data: &NodeData, peer_scroll: u16, block_scroll: u16, screen: Screen, selected_bit: u8, show_bit_modal: bool) {
     let area = f.area();
 
     let outer = Layout::default()
@@ -19,9 +19,13 @@ pub fn draw(f: &mut Frame, data: &NodeData, peer_scroll: u16, block_scroll: u16,
     match screen {
         Screen::Dashboard => draw_body(f, outer[1], data, peer_scroll, block_scroll),
         Screen::KnownPeers => draw_known_peers(f, outer[1], data, peer_scroll),
-        Screen::Signaling => draw_signaling(f, outer[1], data),
+        Screen::Signaling => draw_signaling(f, outer[1], data, selected_bit),
     }
     draw_footer(f, outer[2], screen);
+
+    if show_bit_modal && screen == Screen::Signaling {
+        draw_bit_modal(f, area, selected_bit, data);
+    }
 }
 
 fn draw_header(f: &mut Frame, area: Rect, data: &NodeData, screen: Screen) {
@@ -820,7 +824,7 @@ fn draw_known_peers_services(f: &mut Frame, area: Rect, data: &NodeData, scroll:
     f.render_stateful_widget(table, area, &mut state);
 }
 
-fn draw_signaling(f: &mut Frame, area: Rect, data: &NodeData) {
+fn draw_signaling(f: &mut Frame, area: Rect, data: &NodeData, selected_bit: u8) {
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -829,7 +833,7 @@ fn draw_signaling(f: &mut Frame, area: Rect, data: &NodeData) {
         ])
         .split(area);
 
-    draw_version_bits(f, layout[0], data);
+    draw_version_bits(f, layout[0], data, selected_bit);
     draw_softforks(f, layout[1], data);
 }
 
@@ -928,7 +932,7 @@ fn draw_softforks(f: &mut Frame, area: Rect, data: &NodeData) {
     f.render_widget(table, area);
 }
 
-fn draw_version_bits(f: &mut Frame, area: Rect, data: &NodeData) {
+fn draw_version_bits(f: &mut Frame, area: Rect, data: &NodeData, selected_bit: u8) {
     if data.recent_block_versions.is_empty() {
         let block = Block::default()
             .borders(Borders::ALL)
@@ -969,6 +973,11 @@ fn draw_version_bits(f: &mut Frame, area: Rect, data: &NodeData) {
     bit_names.insert(4, "reduced_data".to_string());
     bit_descs.insert(4, "Reduced Data Temporary Softfork (BIP110)".to_string());
 
+    // Unassigned signaling bits
+    for bit in [3u8, 5, 6, 7, 8, 9, 10, 11, 12] {
+        bit_descs.entry(bit).or_insert_with(|| "Unassigned signaling bit".to_string());
+    }
+
     // BIP320: bits 13-28 reserved for miner nonce rolling
     for bit in 13..=28u8 {
         bit_descs.insert(bit, "BIP320 nonce rolling (ASICBoost)".to_string());
@@ -987,44 +996,15 @@ fn draw_version_bits(f: &mut Frame, area: Rect, data: &NodeData) {
         .style(Style::default().fg(Color::Cyan).bold())
         .bottom_margin(0);
 
-    // Sort into: known signaling bits by pct, unknown signaling bits by pct, BIP320 bits by pct
-    let mut signaling_known: Vec<(u8, u64)> = Vec::new();
-    let mut signaling_unknown: Vec<(u8, u64)> = Vec::new();
-    let mut nonce_rolling: Vec<(u8, u64)> = Vec::new();
-
-    for (&bit, &count) in &bit_counts {
-        if bit >= 13 && bit <= 28 {
-            nonce_rolling.push((bit, count));
-        } else if bit_names.contains_key(&bit) {
-            signaling_known.push((bit, count));
-        } else {
-            signaling_unknown.push((bit, count));
-        }
-    }
-    signaling_known.sort_by(|a, b| b.1.cmp(&a.1));
-    signaling_unknown.sort_by(|a, b| b.1.cmp(&a.1));
-    nonce_rolling.sort_by(|a, b| b.1.cmp(&a.1));
-
-    let sorted_bits: Vec<(u8, u64)> = signaling_known
-        .into_iter()
-        .chain(signaling_unknown.into_iter())
-        .chain(nonce_rolling.into_iter())
-        .collect();
-
-    let rows: Vec<Row> = sorted_bits
-        .iter()
-        .map(|&(bit, count)| {
+    // Show all 29 bits ordered by bit number
+    let rows: Vec<Row> = (0..29u8)
+        .map(|bit| {
+            let count = bit_counts.get(&bit).copied().unwrap_or(0);
             let is_bip320 = bit >= 13 && bit <= 28;
             let name = bit_names
                 .get(&bit)
                 .cloned()
-                .unwrap_or_else(|| {
-                    if is_bip320 {
-                        format!("bit {}", bit)
-                    } else {
-                        format!("bit {} (unassigned)", bit)
-                    }
-                });
+                .unwrap_or_default();
             let desc = bit_descs
                 .get(&bit)
                 .cloned()
@@ -1073,20 +1053,194 @@ fn draw_version_bits(f: &mut Frame, area: Rect, data: &NodeData) {
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
                 .title(format!(
-                    " Version Bit Signaling (last {} blocks, {} BIP9-versioned) ",
+                    " Version Bit Signaling (last {} blocks, {} BIP9-versioned) [j/k select, Enter: details] ",
                     total_blocks, bip9_blocks
                 ))
                 .title_style(Style::default().fg(Color::Yellow).bold()),
-        );
+        )
+        .row_highlight_style(Style::default().bg(Color::DarkGray));
 
-    f.render_widget(table, area);
+    let mut state = TableState::default().with_selected(selected_bit as usize);
+    f.render_stateful_widget(table, area, &mut state);
+}
+
+fn bit_detail(bit: u8) -> (&'static str, &'static str) {
+    match bit {
+        0 => ("BIP9 Bit 0: csv (BIP68/112/113)", "\
+Relative lock-time using sequence numbers. Three BIPs activated together:\n\
+\n\
+BIP68 - Redefines nSequence field to encode relative lock-time,\n\
+  allowing transactions to be time-locked relative to the block\n\
+  that confirmed the parent output (not an absolute block height).\n\
+\n\
+BIP112 - Adds OP_CHECKSEQUENCEVERIFY opcode so scripts can enforce\n\
+  that an output cannot be spent until a relative time has passed.\n\
+  Essential for payment channels and Lightning Network HTLCs.\n\
+\n\
+BIP113 - Uses median-time-past (MTP) instead of block timestamp\n\
+  for time-based lock evaluation, preventing miner manipulation.\n\
+\n\
+Activated at block 419,328 (July 2016). Threshold: 95%."),
+
+        1 => ("BIP9 Bit 1: segwit (BIP141/143/147)", "\
+Segregated Witness - the largest protocol upgrade to Bitcoin.\n\
+\n\
+BIP141 - Moves signature data (witness) outside the base block,\n\
+  creating a new weight-based block limit of 4M weight units.\n\
+  Fixes transaction malleability by excluding witness from txid.\n\
+\n\
+BIP143 - New signature hash algorithm for SegWit inputs that\n\
+  includes the input value, preventing signing-time attacks\n\
+  and enabling efficient hardware wallet verification.\n\
+\n\
+BIP147 - Fixes a dummy stack element malleability in CHECKMULTISIG\n\
+  by requiring it to be exactly OP_0 (null dummy).\n\
+\n\
+Activated at block 481,824 (August 2017). Threshold: 95%.\n\
+Enabled Lightning Network, reduced fees, fixed tx malleability."),
+
+        2 => ("BIP9 Bit 2: taproot (BIP340/341/342)", "\
+Taproot - Schnorr signatures and advanced scripting.\n\
+\n\
+BIP340 - Schnorr signature scheme: more efficient than ECDSA,\n\
+  enables key and signature aggregation (MuSig2), and provides\n\
+  batch verification for faster block validation.\n\
+\n\
+BIP341 - Taproot output structure using a tweaked public key.\n\
+  The common spend path (key path) looks like a regular payment,\n\
+  improving privacy. Complex scripts are hidden in a Merkle tree\n\
+  and only revealed if the key path isn't used.\n\
+\n\
+BIP342 - Tapscript: updated Script rules for Taproot, adds\n\
+  OP_CHECKSIGADD for flexible multisig, removes OP_CHECKMULTISIG,\n\
+  and uses Schnorr-only signature checking in scripts.\n\
+\n\
+Activated at block 709,632 (November 2021). Speedy Trial method."),
+
+        4 => ("BIP9 Bit 4: reduced_data (BIP110)", "\
+Reduced Data Temporary Soft Fork - limits certain transaction\n\
+data to reduce node resource consumption.\n\
+\n\
+BIP110 proposes temporary restrictions on data-carrying\n\
+transactions (like OP_RETURN outputs and witness data) to\n\
+reduce blockchain bloat and state growth.\n\
+\n\
+This is specific to Bitcoin Knots and is not activated on\n\
+Bitcoin Core. It aims to address concerns about non-financial\n\
+data stored on-chain consuming node resources.\n\
+\n\
+Status: Defined/proposed. Not yet widely signaled."),
+
+        3 | 5..=12 => ("Unassigned BIP9 Signaling Bit", "\
+This bit is currently unassigned and available for future\n\
+soft fork proposals using the BIP9 signaling mechanism.\n\
+\n\
+BIP9 reserves bits 0-28 for miners to signal readiness for\n\
+consensus rule changes. Each proposed soft fork is assigned\n\
+a specific bit during its signaling period. Once a deployment\n\
+succeeds or times out, the bit is freed for reuse.\n\
+\n\
+If blocks are signaling this bit, it may indicate:\n\
+- A new proposal not yet recognized by this software\n\
+- Testing or experimental signaling\n\
+- Random noise (unlikely for low bits)"),
+
+        13..=28 => ("BIP320: Version Rolling for ASICBoost", "\
+This bit is reserved for miner nonce rolling under BIP320.\n\
+\n\
+Modern ASIC miners use a technique called ASICBoost that\n\
+manipulates the block header to gain mining efficiency.\n\
+BIP320 designates bits 13-28 of the version field as\n\
+general-purpose bits that miners can freely toggle as\n\
+additional nonce space.\n\
+\n\
+The ~50% signaling rate on each of these bits is expected:\n\
+miners cycle through these bits randomly while hashing,\n\
+so each bit is set roughly half the time by chance.\n\
+\n\
+These bits are NOT used for soft fork signaling and should\n\
+be ignored when evaluating protocol upgrade readiness."),
+
+        _ => ("Unknown Bit", "No information available for this bit."),
+    }
+}
+
+fn draw_bit_modal(f: &mut Frame, area: Rect, selected_bit: u8, data: &NodeData) {
+    // Modal size: 60% width, 60% height, centered
+    let modal_width = (area.width as f32 * 0.65) as u16;
+    let modal_height = (area.height as f32 * 0.6) as u16;
+    let x = (area.width.saturating_sub(modal_width)) / 2;
+    let y = (area.height.saturating_sub(modal_height)) / 2;
+    let modal_area = Rect::new(x, y, modal_width, modal_height);
+
+    // Dim the background
+    let dim = Block::default().style(Style::default().bg(Color::Black));
+    f.render_widget(Clear, modal_area);
+    f.render_widget(dim, area);
+
+    let (title, detail) = bit_detail(selected_bit);
+
+    // Get signaling stats for this bit
+    let total_blocks = data.recent_block_versions.len() as u64;
+    let count = data
+        .recent_block_versions
+        .iter()
+        .filter(|&&(_, v)| v >= 0x20000000 && v & (1i64 << selected_bit) != 0)
+        .count() as u64;
+    let pct = if total_blocks > 0 {
+        (count as f64 / total_blocks as f64) * 100.0
+    } else {
+        0.0
+    };
+
+    let stats_line = format!(
+        "Signaling: {}/{} blocks ({:.1}%)\n",
+        format_number(count),
+        format_number(total_blocks),
+        pct
+    );
+
+    let mut text = vec![
+        Line::from(Span::styled(
+            stats_line,
+            Style::default().fg(Color::Yellow).bold(),
+        )),
+        Line::from(""),
+    ];
+
+    for line in detail.lines() {
+        text.push(Line::from(Span::styled(
+            line.to_string(),
+            Style::default().fg(Color::White),
+        )));
+    }
+
+    text.push(Line::from(""));
+    text.push(Line::from(Span::styled(
+        "Press Esc or Enter to close",
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Double)
+        .title(format!(" {} ", title))
+        .title_style(Style::default().fg(Color::Cyan).bold())
+        .style(Style::default().bg(Color::Black));
+
+    let paragraph = Paragraph::new(text)
+        .block(block)
+        .wrap(Wrap { trim: false });
+
+    f.render_widget(Clear, modal_area);
+    f.render_widget(paragraph, modal_area);
 }
 
 fn draw_footer(f: &mut Frame, area: Rect, screen: Screen) {
     let text = match screen {
         Screen::Dashboard => " q: quit | Tab: known peers | j/k: scroll peers | J/K: scroll blocks ",
         Screen::KnownPeers => " q: quit | Tab: signaling ",
-        Screen::Signaling => " q: quit | Tab: dashboard ",
+        Screen::Signaling => " q: quit | Tab: dashboard | j/k: select bit | Enter: details ",
     };
     let footer = Paragraph::new(text)
         .style(Style::default().fg(Color::DarkGray))
