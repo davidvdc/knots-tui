@@ -18,7 +18,7 @@ pub fn draw(f: &mut Frame, data: &NodeData, peer_scroll: u16, block_scroll: u16,
     draw_header(f, outer[0], data, screen);
     match screen {
         Screen::Dashboard => draw_body(f, outer[1], data, peer_scroll, block_scroll),
-        Screen::KnownPeers => draw_known_peers(f, outer[1], data),
+        Screen::KnownPeers => draw_known_peers(f, outer[1], data, peer_scroll),
         Screen::Signaling => draw_signaling(f, outer[1], data),
     }
     draw_footer(f, outer[2], screen);
@@ -523,7 +523,7 @@ fn draw_blocks_table(f: &mut Frame, area: Rect, data: &NodeData, block_scroll: u
     f.render_stateful_widget(table, area, &mut state);
 }
 
-fn draw_known_peers(f: &mut Frame, area: Rect, data: &NodeData) {
+fn draw_known_peers(f: &mut Frame, area: Rect, data: &NodeData, scroll: u16) {
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -533,7 +533,7 @@ fn draw_known_peers(f: &mut Frame, area: Rect, data: &NodeData) {
         .split(area);
 
     draw_known_peers_time(f, layout[0], data);
-    draw_known_peers_services(f, layout[1], data);
+    draw_known_peers_services(f, layout[1], data, scroll);
 }
 
 fn net_color(net: &str) -> Color {
@@ -665,14 +665,13 @@ fn service_bit_name(bit: u8) -> String {
     }
 }
 
-fn draw_known_peers_services(f: &mut Frame, area: Rect, data: &NodeData) {
+fn draw_known_peers_services(f: &mut Frame, area: Rect, data: &NodeData, scroll: u16) {
     // Discover all service bits present in the dataset
     let mut all_bits_mask: u64 = 0;
     for addr in &data.known_addresses {
         all_bits_mask |= addr.services;
     }
 
-    // Collect active bit positions, sorted
     let mut active_bits: Vec<u8> = Vec::new();
     for bit in 0..64u8 {
         if all_bits_mask & (1u64 << bit) != 0 {
@@ -681,6 +680,7 @@ fn draw_known_peers_services(f: &mut Frame, area: Rect, data: &NodeData) {
     }
 
     // Count per network per bit
+    // networks sorted, plus totals per network
     let mut by_network: BTreeMap<String, (u64, Vec<u64>)> = BTreeMap::new();
 
     for addr in &data.known_addresses {
@@ -700,52 +700,60 @@ fn draw_known_peers_services(f: &mut Frame, area: Rect, data: &NodeData) {
         }
     }
 
-    // Header
-    let mut header_cells = vec!["Network".to_string(), "Total".to_string()];
-    for &bit in &active_bits {
-        header_cells.push(service_bit_name(bit));
+    let networks: Vec<String> = by_network.keys().cloned().collect();
+
+    // Header: Service | network1 | network2 | ... | TOTAL
+    let mut header_cells = vec!["Service".to_string()];
+    for net in &networks {
+        header_cells.push(net.clone());
     }
+    header_cells.push("TOTAL".to_string());
 
     let header = Row::new(header_cells)
         .style(Style::default().fg(Color::Cyan).bold())
         .bottom_margin(0);
 
-    // Aggregate totals
-    let mut agg_total: u64 = 0;
-    let mut agg_bits = vec![0u64; active_bits.len()];
+    // Aggregate totals across all networks
+    let grand_total: u64 = by_network.values().map(|(t, _)| t).sum();
 
-    let mut rows: Vec<Row> = by_network
+    // Rows: one per service bit
+    let mut rows: Vec<Row> = active_bits
         .iter()
-        .map(|(net, (total, bit_counts))| {
-            agg_total += total;
-            for (i, &count) in bit_counts.iter().enumerate() {
-                agg_bits[i] += count;
+        .enumerate()
+        .map(|(i, &bit)| {
+            let mut cells = vec![service_bit_name(bit)];
+            let mut bit_total: u64 = 0;
+
+            for net in &networks {
+                let (net_total, bit_counts) = &by_network[net];
+                let count = bit_counts[i];
+                bit_total += count;
+                cells.push(format_count_pct(count, *net_total));
             }
 
-            let mut cells = vec![net.clone(), format_number(*total)];
-            for (i, &count) in bit_counts.iter().enumerate() {
-                let _ = i;
-                cells.push(format_count_pct(count, *total));
-            }
-            Row::new(cells).style(Style::default().fg(net_color(net)))
+            cells.push(format_count_pct(bit_total, grand_total));
+            Row::new(cells).style(Style::default().fg(Color::White))
         })
         .collect();
 
-    // Totals row
-    let mut total_cells = vec!["TOTAL".to_string(), format_number(agg_total)];
-    for &count in &agg_bits {
-        total_cells.push(format_count_pct(count, agg_total));
+    // Totals row (total peers per network)
+    let mut total_cells = vec!["TOTAL".to_string()];
+    for net in &networks {
+        let (net_total, _) = &by_network[net];
+        total_cells.push(format_number(*net_total));
     }
+    total_cells.push(format_number(grand_total));
     rows.push(
         Row::new(total_cells)
             .style(Style::default().fg(Color::White).bold()),
     );
 
-    // Widths: network + total + one per active bit
-    let mut widths = vec![Constraint::Length(10), Constraint::Length(10)];
-    for _ in &active_bits {
+    // Widths: service name + one per network + total
+    let mut widths = vec![Constraint::Length(12)];
+    for _ in &networks {
         widths.push(Constraint::Length(14));
     }
+    widths.push(Constraint::Length(14));
 
     let table = Table::new(rows, widths)
         .header(header)
@@ -753,11 +761,12 @@ fn draw_known_peers_services(f: &mut Frame, area: Rect, data: &NodeData) {
             Block::default()
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
-                .title(" Services by Network ")
+                .title(" Services by Network [j/k scroll] ")
                 .title_style(Style::default().fg(Color::Yellow).bold()),
         );
 
-    f.render_widget(table, area);
+    let mut state = TableState::default().with_offset(scroll as usize);
+    f.render_stateful_widget(table, area, &mut state);
 }
 
 fn draw_signaling(f: &mut Frame, area: Rect, data: &NodeData) {
