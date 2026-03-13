@@ -299,8 +299,7 @@ impl RpcClient {
         Ok(results)
     }
 
-    pub async fn fetch_all(&self) -> Result<NodeData, String> {
-        // Batch the main info calls
+    pub async fn fetch_dashboard(&self) -> Result<NodeData, String> {
         let now = chrono::Utc::now().timestamp() as u64;
 
         let batch_results = self
@@ -312,7 +311,6 @@ impl RpcClient {
                 ("getpeerinfo", json!([])),
                 ("getnettotals", json!([])),
                 ("uptime", json!([])),
-                ("getnodeaddresses", json!([0])),
             ])
             .await?;
 
@@ -330,9 +328,6 @@ impl RpcClient {
             serde_json::from_value(batch_results[5].clone()).map_err(|e| e.to_string())?;
         let uptime: u64 =
             serde_json::from_value(batch_results[6].clone()).map_err(|e| e.to_string())?;
-        let known_addresses: Vec<KnownAddress> =
-            serde_json::from_value(batch_results[7].clone()).unwrap_or_default();
-        let known_peers = known_addresses.len() as u64;
 
         // Fetch recent blocks (last 8)
         let mut recent_blocks = Vec::new();
@@ -376,8 +371,37 @@ impl RpcClient {
             uptime,
             recent_blocks,
             fetched_at: now,
+            ..Default::default()
+        })
+    }
+
+    pub async fn fetch_known_peers(&self) -> Result<NodeData, String> {
+        let now = chrono::Utc::now().timestamp() as u64;
+
+        let batch_results = self
+            .batch_call(&[
+                ("getnetworkinfo", json!([])),
+                ("uptime", json!([])),
+                ("getnodeaddresses", json!([0])),
+            ])
+            .await?;
+
+        let network: NetworkInfo =
+            serde_json::from_value(batch_results[0].clone()).map_err(|e| e.to_string())?;
+        let uptime: u64 =
+            serde_json::from_value(batch_results[1].clone()).map_err(|e| e.to_string())?;
+        let known_addresses: Vec<KnownAddress> =
+            serde_json::from_value(batch_results[2].clone()).unwrap_or_default();
+        let known_peers = known_addresses.len() as u64;
+
+        Ok(NodeData {
+            error: None,
+            network,
+            uptime,
+            fetched_at: now,
             known_peers,
             known_addresses,
+            ..Default::default()
         })
     }
 }

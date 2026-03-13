@@ -9,6 +9,8 @@ use crossterm::{
 };
 use ratatui::prelude::*;
 use std::io::stdout;
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
@@ -16,8 +18,17 @@ use rpc::{NodeData, RpcClient};
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum Screen {
-    Dashboard,
-    KnownPeers,
+    Dashboard = 0,
+    KnownPeers = 1,
+}
+
+impl Screen {
+    fn from_u8(v: u8) -> Self {
+        match v {
+            1 => Screen::KnownPeers,
+            _ => Screen::Dashboard,
+        }
+    }
 }
 
 #[derive(Parser)]
@@ -52,15 +63,20 @@ async fn main() -> anyhow::Result<()> {
 
     let client = RpcClient::new(&args.rpc_url, &cookie);
 
-    // Channel for node data updates
     let (tx, mut rx) = mpsc::channel::<NodeData>(2);
+    let current_screen = Arc::new(AtomicU8::new(Screen::Dashboard as u8));
 
-    // Spawn background poller
     let poll_client = client.clone();
+    let poll_screen = current_screen.clone();
     let interval = Duration::from_secs(args.interval);
     tokio::spawn(async move {
         loop {
-            match poll_client.fetch_all().await {
+            let screen = Screen::from_u8(poll_screen.load(Ordering::Relaxed));
+            let result = match screen {
+                Screen::Dashboard => poll_client.fetch_dashboard().await,
+                Screen::KnownPeers => poll_client.fetch_known_peers().await,
+            };
+            match result {
                 Ok(data) => {
                     let _ = tx.send(data).await;
                 }
@@ -77,7 +93,6 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
-    // TUI setup
     enable_raw_mode()?;
     stdout().execute(EnterAlternateScreen)?;
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
@@ -109,6 +124,7 @@ async fn main() -> anyhow::Result<()> {
                                 Screen::Dashboard => Screen::KnownPeers,
                                 Screen::KnownPeers => Screen::Dashboard,
                             };
+                            current_screen.store(screen as u8, Ordering::Relaxed);
                         }
                         KeyCode::Down | KeyCode::Char('j') => {
                             peer_scroll = peer_scroll.saturating_add(1);
