@@ -377,7 +377,7 @@ fn draw_mining_card(f: &mut Frame, area: Rect, data: &NodeData) {
 }
 
 fn draw_peers_table(f: &mut Frame, area: Rect, data: &NodeData, scroll: u16) {
-    let header = Row::new(vec!["ID", "Address", "Client", "Dir", "Height", "Ping", "Sent", "Recv"])
+    let header = Row::new(vec!["ID", "Address", "Client", "Type", "Dir", "Height", "Ping", "Sent", "Recv"])
         .style(Style::default().fg(Color::Cyan).bold())
         .bottom_margin(0);
 
@@ -391,18 +391,13 @@ fn draw_peers_table(f: &mut Frame, area: Rect, data: &NodeData, scroll: u16) {
                 .map(|t| format!("{:.0}ms", t * 1000.0))
                 .unwrap_or_else(|| "-".to_string());
 
-            // Trim subver
             let client = p.subver.trim_matches('/').to_string();
-            let client_short = if client.len() > 20 {
-                format!("{}...", &client[..17])
-            } else {
-                client
-            };
 
             Row::new(vec![
                 p.id.to_string(),
                 p.addr.clone(),
-                client_short,
+                client,
+                p.connection_type.clone(),
                 dir.to_string(),
                 p.synced_blocks.to_string(),
                 ping,
@@ -420,7 +415,8 @@ fn draw_peers_table(f: &mut Frame, area: Rect, data: &NodeData, scroll: u16) {
     let widths = [
         Constraint::Length(4),
         Constraint::Min(18),
-        Constraint::Length(22),
+        Constraint::Min(30),
+        Constraint::Length(14),
         Constraint::Length(4),
         Constraint::Length(8),
         Constraint::Length(7),
