@@ -76,6 +76,7 @@ async fn main() -> anyhow::Result<()> {
     enable_raw_mode()?;
     stdout().execute(EnterAlternateScreen)?;
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
+    terminal.clear()?;
 
     let mut node_data = NodeData::default();
     let mut last_render = Instant::now();

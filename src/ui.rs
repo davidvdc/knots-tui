@@ -92,14 +92,17 @@ fn draw_body(f: &mut Frame, area: Rect, data: &NodeData, peer_scroll: u16, block
     draw_network_card(f, top_cols[2], data);
     draw_mining_card(f, top_cols[3], data);
 
-    // Bottom row: peers + recent blocks
-    let bottom_cols = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
+    // Bottom: recent blocks then peers, stacked vertically
+    let bottom_rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(11), // 8 blocks + header + borders
+            Constraint::Min(8),    // peers fills the rest
+        ])
         .split(rows[1]);
 
-    draw_peers_table(f, bottom_cols[0], data, peer_scroll);
-    draw_blocks_table(f, bottom_cols[1], data, block_scroll);
+    draw_blocks_table(f, bottom_rows[0], data, block_scroll);
+    draw_peers_table(f, bottom_rows[1], data, peer_scroll);
 }
 
 fn draw_blockchain_card(f: &mut Frame, area: Rect, data: &NodeData) {
