@@ -120,5 +120,6 @@ async fn main() -> anyhow::Result<()> {
 
     disable_raw_mode()?;
     stdout().execute(LeaveAlternateScreen)?;
+    terminal.clear()?;
     Ok(())
 }
