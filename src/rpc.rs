@@ -464,7 +464,6 @@ impl RpcClient {
                 ("getblockchaininfo", json!([])),
                 ("getnetworkinfo", json!([])),
                 ("uptime", json!([])),
-                ("getpeerinfo", json!([])),
             ])
             .await?;
 
@@ -474,8 +473,6 @@ impl RpcClient {
             serde_json::from_value(batch_results[1].clone()).map_err(|e| e.to_string())?;
         let uptime: u64 =
             serde_json::from_value(batch_results[2].clone()).map_err(|e| e.to_string())?;
-        let peers: Vec<PeerInfo> =
-            serde_json::from_value(batch_results[3].clone()).map_err(|e| e.to_string())?;
 
         // Fetch last 144 blocks (~1 day) to scan version bits
         let mut recent_block_versions = Vec::new();
@@ -502,7 +499,6 @@ impl RpcClient {
             blockchain,
             network,
             uptime,
-            peers,
             fetched_at: now,
             softforks,
             recent_block_versions,
