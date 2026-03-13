@@ -955,14 +955,26 @@ fn draw_version_bits(f: &mut Frame, area: Rect, data: &NodeData) {
         }
     }
 
-    // Build bit name lookup from softforks + known deployments
+    // Build bit name and description lookups
     let mut bit_names: BTreeMap<u8, String> = BTreeMap::new();
+    let mut bit_descs: BTreeMap<u8, String> = BTreeMap::new();
+
     // Known BIP9 version bit assignments
-    bit_names.insert(1, "csv".to_string());          // BIP68/112/113
-    bit_names.insert(2, "segwit".to_string());        // BIP141/143/147
-    bit_names.insert(4, "reduced_data".to_string());  // BIP110
-    bit_names.insert(25, "taproot".to_string());      // BIP341/342
-    // Override with live softfork data from the node
+    bit_names.insert(0, "csv".to_string());
+    bit_descs.insert(0, "Relative lock-time (BIP68/112/113)".to_string());
+    bit_names.insert(1, "segwit".to_string());
+    bit_descs.insert(1, "Segregated Witness (BIP141/143/147)".to_string());
+    bit_names.insert(2, "taproot".to_string());
+    bit_descs.insert(2, "Taproot/Schnorr (BIP340/341/342)".to_string());
+    bit_names.insert(4, "reduced_data".to_string());
+    bit_descs.insert(4, "Reduced Data Temporary Softfork (BIP110)".to_string());
+
+    // BIP320: bits 13-28 reserved for miner nonce rolling
+    for bit in 13..=28u8 {
+        bit_descs.insert(bit, "BIP320 nonce rolling (ASICBoost)".to_string());
+    }
+
+    // Override names with live softfork data from the node
     for (name, fork) in &data.softforks {
         if let Some(ref bip9) = fork.bip9 {
             if let Some(bit) = bip9.bit {
@@ -971,37 +983,56 @@ fn draw_version_bits(f: &mut Frame, area: Rect, data: &NodeData) {
         }
     }
 
-    let header = Row::new(vec!["Bit", "Name", "Signaling", "Pct", "Bar"])
+    let header = Row::new(vec!["Bit", "Name", "Signaling", "Pct", "Description"])
         .style(Style::default().fg(Color::Cyan).bold())
         .bottom_margin(0);
 
-    // Split into known and unknown bits, sort each by pct descending
-    let mut known: Vec<(u8, u64)> = Vec::new();
-    let mut unknown: Vec<(u8, u64)> = Vec::new();
+    // Sort into: known signaling bits by pct, unknown signaling bits by pct, BIP320 bits by pct
+    let mut signaling_known: Vec<(u8, u64)> = Vec::new();
+    let mut signaling_unknown: Vec<(u8, u64)> = Vec::new();
+    let mut nonce_rolling: Vec<(u8, u64)> = Vec::new();
+
     for (&bit, &count) in &bit_counts {
-        if bit_names.contains_key(&bit) {
-            known.push((bit, count));
+        if bit >= 13 && bit <= 28 {
+            nonce_rolling.push((bit, count));
+        } else if bit_names.contains_key(&bit) {
+            signaling_known.push((bit, count));
         } else {
-            unknown.push((bit, count));
+            signaling_unknown.push((bit, count));
         }
     }
-    known.sort_by(|a, b| b.1.cmp(&a.1));
-    unknown.sort_by(|a, b| b.1.cmp(&a.1));
+    signaling_known.sort_by(|a, b| b.1.cmp(&a.1));
+    signaling_unknown.sort_by(|a, b| b.1.cmp(&a.1));
+    nonce_rolling.sort_by(|a, b| b.1.cmp(&a.1));
 
-    let sorted_bits: Vec<(u8, u64)> = known.into_iter().chain(unknown.into_iter()).collect();
-
-    // Bar width based on available space
-    let bar_width = area.width.saturating_sub(60) as usize;
+    let sorted_bits: Vec<(u8, u64)> = signaling_known
+        .into_iter()
+        .chain(signaling_unknown.into_iter())
+        .chain(nonce_rolling.into_iter())
+        .collect();
 
     let rows: Vec<Row> = sorted_bits
         .iter()
         .map(|&(bit, count)| {
+            let is_bip320 = bit >= 13 && bit <= 28;
             let name = bit_names
                 .get(&bit)
                 .cloned()
-                .unwrap_or_else(|| format!("bit {}", bit));
+                .unwrap_or_else(|| {
+                    if is_bip320 {
+                        format!("bit {}", bit)
+                    } else {
+                        format!("bit {} (unassigned)", bit)
+                    }
+                });
+            let desc = bit_descs
+                .get(&bit)
+                .cloned()
+                .unwrap_or_default();
             let pct = (count as f64 / total_blocks as f64) * 100.0;
-            let color = if pct >= 95.0 {
+            let color = if is_bip320 {
+                Color::DarkGray
+            } else if pct >= 95.0 {
                 Color::Green
             } else if pct >= 50.0 {
                 Color::Yellow
@@ -1009,19 +1040,12 @@ fn draw_version_bits(f: &mut Frame, area: Rect, data: &NodeData) {
                 Color::White
             };
 
-            let filled = ((pct / 100.0) * bar_width as f64) as usize;
-            let bar = format!(
-                "{}{}",
-                "\u{2588}".repeat(filled),
-                "\u{2591}".repeat(bar_width.saturating_sub(filled))
-            );
-
             Row::new(vec![
                 bit.to_string(),
                 name,
                 format!("{}/{}", format_number(count), format_number(total_blocks)),
                 format!("{:.1}%", pct),
-                bar,
+                desc,
             ])
             .style(Style::default().fg(color))
         })
@@ -1029,10 +1053,10 @@ fn draw_version_bits(f: &mut Frame, area: Rect, data: &NodeData) {
 
     let widths = [
         Constraint::Length(4),
-        Constraint::Length(20),
+        Constraint::Length(22),
         Constraint::Length(12),
         Constraint::Length(8),
-        Constraint::Min(10),
+        Constraint::Min(20),
     ];
 
     // Count blocks with BIP9 version bit prefix
