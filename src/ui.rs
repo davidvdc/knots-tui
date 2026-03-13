@@ -1020,8 +1020,10 @@ fn draw_version_bits(f: &mut Frame, area: Rect, data: &NodeData, selected_bit: u
                 Color::White
             };
 
+            let marker = if bit == selected_bit { ">" } else { " " };
+
             Row::new(vec![
-                bit.to_string(),
+                format!("{} {:>2}", marker, bit),
                 name,
                 format!("{}/{}", format_number(count), format_number(total_blocks)),
                 format!("{:.1}%", pct),
@@ -1032,7 +1034,7 @@ fn draw_version_bits(f: &mut Frame, area: Rect, data: &NodeData, selected_bit: u
         .collect();
 
     let widths = [
-        Constraint::Length(4),
+        Constraint::Length(5),
         Constraint::Length(22),
         Constraint::Length(12),
         Constraint::Length(8),
@@ -1058,7 +1060,7 @@ fn draw_version_bits(f: &mut Frame, area: Rect, data: &NodeData, selected_bit: u
                 ))
                 .title_style(Style::default().fg(Color::Yellow).bold()),
         )
-        .row_highlight_style(Style::default().bg(Color::DarkGray));
+        .row_highlight_style(Style::default().bg(Color::Rgb(40, 40, 60)));
 
     let mut state = TableState::default().with_selected(selected_bit as usize);
     f.render_stateful_widget(table, area, &mut state);
