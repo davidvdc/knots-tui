@@ -480,7 +480,7 @@ fn draw_peers_table(f: &mut Frame, area: Rect, data: &NodeData, scroll: u16) {
 }
 
 fn draw_blocks_table(f: &mut Frame, area: Rect, data: &NodeData, block_scroll: u16) {
-    let header = Row::new(vec!["Height", "TXs", "Size", "Weight", "Age"])
+    let header = Row::new(vec!["Height", "TXs", "Size", "Weight", "Age", "BIP110"])
         .style(Style::default().fg(Color::Cyan).bold())
         .bottom_margin(0);
 
@@ -495,12 +495,20 @@ fn draw_blocks_table(f: &mut Frame, area: Rect, data: &NodeData, block_scroll: u
             } else {
                 "-".to_string()
             };
+            // BIP110 (reduced_data) signals on bit 4 with BIP9 version prefix
+            let bip110 = if b.version >= 0x20000000 && b.version & (1 << 4) != 0 {
+                "yes"
+            } else {
+                "no"
+            };
+            let bip110_color = if bip110 == "yes" { Color::Green } else { Color::DarkGray };
             Row::new(vec![
-                format_number(b.height),
-                format_number(b.tx_count as u64),
-                format_bytes_short(b.size),
-                format!("{:.1} kvWU", b.weight as f64 / 1000.0),
-                age,
+                Cell::from(format_number(b.height)),
+                Cell::from(format_number(b.tx_count as u64)),
+                Cell::from(format_bytes_short(b.size)),
+                Cell::from(format!("{:.1} kvWU", b.weight as f64 / 1000.0)),
+                Cell::from(age),
+                Cell::from(Span::styled(bip110.to_string(), Style::default().fg(bip110_color))),
             ])
         })
         .collect();
@@ -510,7 +518,8 @@ fn draw_blocks_table(f: &mut Frame, area: Rect, data: &NodeData, block_scroll: u
         Constraint::Length(7),
         Constraint::Length(10),
         Constraint::Length(12),
-        Constraint::Min(8),
+        Constraint::Length(12),
+        Constraint::Min(6),
     ];
 
     let table = Table::new(rows, widths)

@@ -252,6 +252,7 @@ pub struct BlockInfo {
     pub weight: u64,
     pub tx_count: usize,
     pub time: u64,
+    pub version: i64,
 }
 
 #[derive(Deserialize)]
@@ -400,6 +401,7 @@ impl RpcClient {
                 block_val["tx"].as_array().map(|a| a.len() as u64).unwrap_or(0),
             ) as usize;
             let time = block_val["time"].as_u64().unwrap_or(0);
+            let version = block_val["version"].as_i64().unwrap_or(0);
             let prev = block_val["previousblockhash"]
                 .as_str()
                 .unwrap_or("")
@@ -412,6 +414,7 @@ impl RpcClient {
                 weight,
                 tx_count,
                 time,
+                version,
             });
             block_hash = prev;
         }
