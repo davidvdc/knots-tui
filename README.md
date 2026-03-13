@@ -3,22 +3,26 @@
 A terminal dashboard for monitoring your Bitcoin Knots node in real time.
 
 ```
-╭──────────────────────────────────────────────────────────────────────╮
-│  Bitcoin Knots Dashboard | /Satoshi:27.1.0/ | chain: main | uptime  │
-╰──────────────────────────────────────────────────────────────────────╯
-╭ Blockchain ──╮╭ Mempool ─────╮╭ Network ─────╮╭ Mining ──────╮
-│ Height  ...  ││ TXs     ...  ││ Conns   ...  ││ Hashrate ... │
-│ Headers ...  ││ Size    ...  ││ Protocol ... ││ Pooled   ... │
-│ Synced  ...  ││ Memory  ...  ││ Recv    ...  │╰──────────────╯
-│ Diff    ...  ││ Fees    ...  ││ Sent    ...  │
-╰──────────────╯╰──────────────╯╰──────────────╯
-╭ Recent Blocks ───────────────────────────────────────────────────────╮
-│ Height    TXs    Size      Weight       Age                         │
-│ 890,123   4,231  1.54 MB   3998.1 kvWU  12m                        │
-╰──────────────────────────────────────────────────────────────────────╯
-╭ Peers (42) | known: 18,392 ─────────────────────────────────────────╮
-│ ID  Address          Client       Type                 TX  Dir  ... │
-╰─────────────────────────────────────────────────────────────────────╯
++----------------------------------------------------------------------+
+|  Bitcoin Knots Dashboard | /Satoshi:27.1.0/ | chain: main | uptime   |
++----------------------------------------------------------------------+
++-Blockchain------+-Mempool--------+-Network--------+-Mining-----------+
+| Height  890,123 | TXs    12,345  | Conns 42(8/34) | Hashrate  824EH  |
+| Headers 890,123 | Size  4.52 MB  | Protocol 70016 | Pooled TX   185  |
+| Synced  YES     | Memory 298/300 | Recv  12.50 GB |                  |
+| Diff   9.52e13  | Fees 0.423 BTC | Sent   8.21 GB |                  |
+| Disk  620.15 GB | Min fee 0.00.. | Relay fee 0.0. |                  |
++-----------------+----------------+----------------+------------------+
++-Recent Blocks [J/K scroll]-------------------------------------------+
+| Height     TXs     Size       Weight        Age                      |
+| 890,123    4,231   1.54 MB    3998.1 kvWU   12m                      |
+| 890,122    3,892   1.48 MB    3991.2 kvWU   22m                      |
++----------------------------------------------------------------------+
++-Peers (42) | known: 18,392 [j/k scroll]------------------------------+
+| ID  Address          Client              Type                TX  Dir |
+| 1   1.2.3.4:8333     Satoshi:27.0.0      outbound-full-relay yes out |
+| 2   5.6.7.8:8333     Satoshi:26.0.0      block-relay-only    no  out |
++----------------------------------------------------------------------+
 ```
 
 ## Features
@@ -41,25 +45,13 @@ Download the pre-built x86_64 Linux binary:
 curl -L -o knots-tui "https://github.com/davidvdc/knots-tui/raw/main/out/knots-tui" && chmod +x knots-tui
 ```
 
-## Build from source
-
-Requires Docker (no local Rust toolchain needed):
-
-```bash
-git clone https://github.com/davidvdc/knots-tui.git
-cd knots-tui
-docker build --platform linux/amd64 --output type=local,dest=./out -f Dockerfile .
-```
-
-Binary will be at `out/knots-tui`.
-
 ## Usage
 
-```bash
-./knots-tui --rpc-url http://<node-ip>:8332 --cookie-file /path/to/.cookie
-```
+All parameters are optional and have sensible defaults:
 
-### Options
+```bash
+./knots-tui [--rpc-url <url>] [--cookie-file <path>] [--interval <seconds>]
+```
 
 | Flag | Env var | Default | Description |
 |---|---|---|---|
