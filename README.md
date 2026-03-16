@@ -57,10 +57,19 @@ Data fetched using batched RPC calls for efficiency. Dashboard uses cheap quick-
 Press `Enter` on a selected block (with stats loaded) to see:
 
 - Total BTC output and fees
-- Transaction breakdown: financial vs data/spam
-- Data/spam subdivided into OP_RETURN and inscription categories
-- OP_RETURN size analysis: oversized count (>83 bytes), largest OP_RETURN size
-- Classification: OP_RETURN = nulldata outputs; inscriptions = witness items > 520 bytes
+- Transaction breakdown: financial vs data/spam (mutually exclusive — totals add up)
+- **Protocol breakdown** with per-protocol tx count and percentage:
+  - **Runes** — OP_RETURN with OP_13 tag (`6a5d`)
+  - **BRC-20** — ordinals inscription containing `"brc-20"` JSON payload
+  - **Inscriptions** — ordinals witness envelope (excl. BRC-20)
+  - **OPNET** — tapscript with `"op"` magic bytes (5-item witness, 65-byte control block)
+  - **Stamps** — bare multisig outputs (SRC-20/Stamps protocol)
+  - **Counterparty** — OP_RETURN with `CNTRPRTY` prefix
+  - **Omni Layer** — OP_RETURN with `omni` prefix
+  - **OP_RETURN other** — unclassified nulldata outputs
+  - **Other** — data transactions not matching any known protocol
+- **Taproot usage** — transactions spending from and creating taproot outputs
+- **OP_RETURN size analysis** — oversized count (>83 bytes), largest OP_RETURN size
 
 Navigate between blocks with `↑/↓` while the modal is open.
 
