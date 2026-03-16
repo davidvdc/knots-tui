@@ -267,6 +267,7 @@ pub struct BlockStats {
     pub rune_count: usize,        // OP_RETURN with OP_13 tag
     pub brc20_count: usize,       // inscription with "brc-20" payload
     pub inscription_count: usize, // ordinals envelope (excl. BRC-20)
+    pub opnet_count: usize,       // OPNET/BSI (tapscript with "op" magic)
     pub stamp_count: usize,       // bare multisig (no OP_RETURN/inscription)
     pub counterparty_count: usize, // OP_RETURN with CNTRPRTY prefix
     pub omni_count: usize,        // OP_RETURN with omni prefix
@@ -492,6 +493,7 @@ impl RpcClient {
             let mut rune_count = 0usize;
             let mut brc20_count = 0usize;
             let mut inscription_count = 0usize; // ordinals excl. BRC-20
+            let mut opnet_count = 0usize;
             let mut stamp_count = 0usize;
             let mut counterparty_count = 0usize;
             let mut omni_count = 0usize;
@@ -559,6 +561,7 @@ impl RpcClient {
                     // --- Scan inputs/witness ---
                     let mut has_inscription = false;
                     let mut has_brc20 = false;
+                    let mut has_opnet = false;
                     let mut has_taproot_spend = false;
                     if let Some(ins) = tx["vin"].as_array() {
                         for input in ins {
@@ -568,6 +571,15 @@ impl RpcClient {
                                 has_taproot_spend = true;
                             }
                             if let Some(witness) = input["txinwitness"].as_array() {
+                                // OPNET: exactly 5 witness items, control block (item[4]) = 65 bytes (130 hex),
+                                // tapscript (item[3]) contains "026f70" (2-byte push of "op")
+                                if witness.len() == 5 {
+                                    let ctrl = witness[4].as_str().unwrap_or("");
+                                    let tapscript = witness[3].as_str().unwrap_or("");
+                                    if ctrl.len() == 130 && tapscript.contains("026f70") {
+                                        has_opnet = true;
+                                    }
+                                }
                                 for item in witness {
                                     if let Some(hex) = item.as_str() {
                                         if hex.contains("0063036f7264") {
@@ -593,6 +605,8 @@ impl RpcClient {
                         brc20_count += 1;
                     } else if has_inscription {
                         inscription_count += 1;
+                    } else if has_opnet {
+                        opnet_count += 1;
                     } else if has_rune {
                         rune_count += 1;
                     } else if has_counterparty {
@@ -612,7 +626,7 @@ impl RpcClient {
 
             let user_tx = tx_count.saturating_sub(1); // exclude coinbase
             let data_count = rune_count + brc20_count + inscription_count
-                + stamp_count + counterparty_count + omni_count
+                + opnet_count + stamp_count + counterparty_count + omni_count
                 + opreturn_other_count;
             // Sanity: if there are more data txs than user txs, clamp
             let financial_count = user_tx.saturating_sub(data_count);
@@ -626,6 +640,7 @@ impl RpcClient {
                 rune_count,
                 brc20_count,
                 inscription_count,
+                opnet_count,
                 stamp_count,
                 counterparty_count,
                 omni_count,

@@ -1355,6 +1355,7 @@ fn draw_block_modal(f: &mut Frame, area: Rect, block: &BlockInfo, stats: &BlockS
         ("Runes",          stats.rune_count),
         ("BRC-20",         stats.brc20_count),
         ("Inscriptions",   stats.inscription_count),
+        ("OPNET",          stats.opnet_count),
         ("Stamps",         stats.stamp_count),
         ("Counterparty",   stats.counterparty_count),
         ("Omni Layer",     stats.omni_count),
