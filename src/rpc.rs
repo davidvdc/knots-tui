@@ -256,9 +256,10 @@ pub struct BlockInfo {
     pub version: i64,
 }
 
-#[derive(Default, Clone, Debug)]
+#[derive(Default, Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct BlockStats {
     pub height: u64,
+    pub time: u64,                // block timestamp
     pub total_out: u64,           // total BTC output in satoshis
     pub total_fee: u64,           // total fees in satoshis
     pub tx_count: usize,          // total transactions (incl coinbase)
@@ -486,6 +487,7 @@ impl RpcClient {
 
             let total_out = batch[0]["total_out"].as_u64().unwrap_or(0);
             let total_fee = batch[0]["totalfee"].as_u64().unwrap_or(0);
+            let block_time = batch[1]["time"].as_u64().unwrap_or(0);
 
             let txs = batch[1]["tx"].as_array();
             let mut tx_count = 0usize;
@@ -633,6 +635,7 @@ impl RpcClient {
 
             all_stats.push(BlockStats {
                 height: *height,
+                time: block_time,
                 total_out,
                 total_fee,
                 tx_count,
@@ -654,6 +657,14 @@ impl RpcClient {
         }
 
         Ok(all_stats)
+    }
+
+    /// Fetch block stats for a single block by height (for analytics backfill)
+    pub async fn fetch_block_stats_by_height(&self, height: u64) -> Result<BlockStats, String> {
+        let hash_val = self.call("getblockhash", json!([height])).await?;
+        let hash = hash_val.as_str().unwrap_or("").to_string();
+        let results = self.fetch_block_stats(&[(height, hash)]).await?;
+        results.into_iter().next().ok_or_else(|| "no stats returned".to_string())
     }
 
     pub async fn fetch_known_peers(&self) -> Result<NodeData, String> {

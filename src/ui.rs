@@ -1,9 +1,9 @@
 use crate::rpc::{BlockInfo, BlockStats, NodeData};
-use crate::Screen;
+use crate::{AnalyticsData, AnalyticsState, Screen};
 use ratatui::{prelude::*, widgets::*};
 use std::collections::{BTreeMap, HashMap};
 
-pub fn draw(f: &mut Frame, data: &NodeData, peer_scroll: u16, screen: Screen, selected_bit: u8, show_bit_modal: bool, rpc_spinner: u8, block_stats: &HashMap<u64, BlockStats>, selected_block: u8, show_block_modal: bool, blocks_focused: bool) {
+pub fn draw(f: &mut Frame, data: &NodeData, peer_scroll: u16, screen: Screen, selected_bit: u8, show_bit_modal: bool, rpc_spinner: u8, block_stats: &HashMap<u64, BlockStats>, selected_block: u8, show_block_modal: bool, blocks_focused: bool, analytics: &AnalyticsData) {
     let area = f.area();
 
     let outer = Layout::default()
@@ -20,6 +20,7 @@ pub fn draw(f: &mut Frame, data: &NodeData, peer_scroll: u16, screen: Screen, se
         Screen::Dashboard => draw_body(f, outer[1], data, peer_scroll, block_stats, selected_block, blocks_focused),
         Screen::KnownPeers => draw_known_peers(f, outer[1], data, peer_scroll),
         Screen::Signaling => draw_signaling(f, outer[1], data, selected_bit),
+        Screen::Analytics => draw_analytics(f, outer[1], analytics),
     }
     draw_footer(f, outer[2], screen, rpc_spinner);
 
@@ -54,6 +55,7 @@ fn draw_header(f: &mut Frame, area: Rect, data: &NodeData, screen: Screen) {
         Screen::Dashboard => "Dashboard",
         Screen::KnownPeers => "Known Peers",
         Screen::Signaling => "Signaling",
+        Screen::Analytics => "Analytics",
     };
 
     let title = format!(
@@ -1463,11 +1465,173 @@ fn draw_block_modal(f: &mut Frame, area: Rect, block: &BlockInfo, stats: &BlockS
     f.render_widget(paragraph, modal_area);
 }
 
+fn draw_analytics(f: &mut Frame, area: Rect, analytics: &AnalyticsData) {
+    match analytics.state {
+        AnalyticsState::Idle => {
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .title(" Analytics ")
+                .style(Style::default().fg(Color::Cyan));
+            let text = Paragraph::new(vec![
+                Line::from(""),
+                Line::from(Span::styled(
+                    "Press 's' to start analysis (~30 days, ~4320 blocks)",
+                    Style::default().fg(Color::White),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "Analyzes non-financial transaction ratio per day.",
+                    Style::default().fg(Color::DarkGray),
+                )),
+                Line::from(Span::styled(
+                    "Results are saved to ~/.knots-tui/blockstats.jsonl",
+                    Style::default().fg(Color::DarkGray),
+                )),
+            ])
+            .block(block)
+            .alignment(Alignment::Center);
+            f.render_widget(text, area);
+        }
+        AnalyticsState::Running => {
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .title(" Analytics — Fetching ")
+                .style(Style::default().fg(Color::Yellow));
+            let pct = if analytics.progress_total > 0 {
+                (analytics.progress_current as f64 / analytics.progress_total as f64 * 100.0) as u16
+            } else {
+                0
+            };
+            let gauge = Gauge::default()
+                .block(Block::default())
+                .gauge_style(Style::default().fg(Color::Yellow).bg(Color::DarkGray))
+                .percent(pct)
+                .label(format!(
+                    "{} / {} blocks ({}%)",
+                    analytics.progress_current, analytics.progress_total, pct
+                ));
+            let inner = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Min(1),
+                    Constraint::Length(1),
+                    Constraint::Min(1),
+                ])
+                .split(block.inner(area));
+            f.render_widget(block, area);
+            f.render_widget(gauge, inner[1]);
+
+            // Show partial chart if we have data
+            if analytics.stats.len() > 1 {
+                render_analytics_chart(f, inner[2], &analytics.stats);
+            }
+        }
+        AnalyticsState::Done => {
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .title(format!(" Analytics — {} blocks ", analytics.stats.len()))
+                .style(Style::default().fg(Color::Green));
+
+            if analytics.stats.is_empty() {
+                let text = Paragraph::new("No data available.")
+                    .block(block)
+                    .alignment(Alignment::Center);
+                f.render_widget(text, area);
+            } else {
+                let inner = block.inner(area);
+                f.render_widget(block, area);
+                render_analytics_chart(f, inner, &analytics.stats);
+            }
+        }
+    }
+}
+
+fn render_analytics_chart(f: &mut Frame, area: Rect, stats: &[BlockStats]) {
+    // Aggregate by day: non-financial ratio per day
+    let mut daily: BTreeMap<String, (u64, u64)> = BTreeMap::new(); // date -> (non_financial, total)
+    for s in stats {
+        if s.tx_count == 0 {
+            continue;
+        }
+        let date = chrono::DateTime::from_timestamp(s.time as i64, 0)
+            .map(|dt| dt.format("%m-%d").to_string())
+            .unwrap_or_default();
+        let entry = daily.entry(date).or_insert((0, 0));
+        let non_fin = s.tx_count.saturating_sub(s.financial_count);
+        entry.0 += non_fin as u64;
+        entry.1 += s.tx_count as u64;
+    }
+
+    if daily.is_empty() {
+        return;
+    }
+
+    let labels: Vec<String> = daily.keys().cloned().collect();
+    let data_points: Vec<(f64, f64)> = daily
+        .values()
+        .enumerate()
+        .map(|(i, (non_fin, total))| {
+            let pct = if *total > 0 {
+                *non_fin as f64 / *total as f64 * 100.0
+            } else {
+                0.0
+            };
+            (i as f64, pct)
+        })
+        .collect();
+
+    let max_y = data_points
+        .iter()
+        .map(|(_, y)| *y)
+        .fold(0.0_f64, f64::max)
+        .max(1.0);
+    let y_upper = (max_y * 1.1).min(100.0);
+
+    let dataset = Dataset::default()
+        .name("Non-financial %")
+        .marker(ratatui::symbols::Marker::Braille)
+        .graph_type(GraphType::Line)
+        .style(Style::default().fg(Color::Yellow))
+        .data(&data_points);
+
+    // Show ~8 evenly spaced x-axis labels
+    let step = if labels.len() > 8 { labels.len() / 8 } else { 1 };
+    let x_labels: Vec<Span> = labels
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| i % step == 0 || *i == labels.len() - 1)
+        .map(|(_, l)| Span::styled(l.clone(), Style::default().fg(Color::DarkGray)))
+        .collect();
+
+    let chart = Chart::new(vec![dataset])
+        .block(Block::default().title(" Non-Financial TX % by Day ").borders(Borders::ALL).border_type(BorderType::Rounded).style(Style::default().fg(Color::Cyan)))
+        .x_axis(
+            Axis::default()
+                .labels(x_labels)
+                .bounds([0.0, (labels.len() - 1).max(1) as f64]),
+        )
+        .y_axis(
+            Axis::default()
+                .labels(vec![
+                    Span::styled("0%", Style::default().fg(Color::DarkGray)),
+                    Span::styled(format!("{:.0}%", y_upper / 2.0), Style::default().fg(Color::DarkGray)),
+                    Span::styled(format!("{:.0}%", y_upper), Style::default().fg(Color::DarkGray)),
+                ])
+                .bounds([0.0, y_upper]),
+        );
+
+    f.render_widget(chart, area);
+}
+
 fn draw_footer(f: &mut Frame, area: Rect, screen: Screen, rpc_spinner: u8) {
     let hints = match screen {
         Screen::Dashboard => " q: quit | Tab: switch screen | j/k: switch table | ↑/↓: navigate | r: refresh ",
         Screen::KnownPeers => " q: quit | Tab: signaling | ↑/↓: scroll services | r: refresh ",
-        Screen::Signaling => " q: quit | Tab: dashboard | ↑/↓: select bit | Enter: details | r: refresh ",
+        Screen::Signaling => " q: quit | Tab: analytics | ↑/↓: select bit | Enter: details | r: refresh ",
+        Screen::Analytics => " q: quit | Tab: dashboard | s: start analysis | Esc: stop ",
     };
 
     const SPINNER: &[&str] = &[".  ", ".. ", "...", " ..", "  .", "   "];

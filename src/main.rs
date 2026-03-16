@@ -18,11 +18,59 @@ use tokio::sync::{mpsc, Notify};
 
 use rpc::{BlockStats, NodeData, RpcClient};
 
+fn stats_file_path() -> std::path::PathBuf {
+    let dir = shellexpand::tilde("~/.knots-tui").to_string();
+    let path = std::path::PathBuf::from(&dir);
+    let _ = std::fs::create_dir_all(&path);
+    path.join("blockstats.jsonl")
+}
+
+fn append_stats_to_file(stats: &[BlockStats]) {
+    use std::io::Write;
+    let path = stats_file_path();
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        for s in stats {
+            if let Ok(line) = serde_json::to_string(s) {
+                let _ = writeln!(f, "{}", line);
+            }
+        }
+    }
+}
+
+fn load_stats_from_file() -> Vec<BlockStats> {
+    let path = stats_file_path();
+    let mut stats = Vec::new();
+    if let Ok(content) = std::fs::read_to_string(&path) {
+        for line in content.lines() {
+            if let Ok(s) = serde_json::from_str::<BlockStats>(line) {
+                stats.push(s);
+            }
+        }
+    }
+    stats
+}
+
+/// State for the analytics task
+#[derive(Clone, PartialEq)]
+pub enum AnalyticsState {
+    Idle,           // waiting for user to press 's'
+    Running,        // backfill in progress
+    Done,           // analysis complete
+}
+
+pub struct AnalyticsData {
+    pub state: AnalyticsState,
+    pub stats: Vec<BlockStats>,       // all loaded stats, sorted by height
+    pub progress_current: u64,        // blocks analyzed so far
+    pub progress_total: u64,          // total blocks to analyze
+}
+
 #[derive(Clone, Copy, PartialEq)]
 pub enum Screen {
     Dashboard = 0,
     KnownPeers = 1,
     Signaling = 2,
+    Analytics = 3,
 }
 
 impl Screen {
@@ -30,6 +78,7 @@ impl Screen {
         match v {
             1 => Screen::KnownPeers,
             2 => Screen::Signaling,
+            3 => Screen::Analytics,
             _ => Screen::Dashboard,
         }
     }
@@ -130,7 +179,7 @@ async fn main() -> anyhow::Result<()> {
                     }
                 }
                 Screen::KnownPeers => Some(poll_client.fetch_known_peers().await),
-                Screen::Signaling => None, // handled by signaling task
+                Screen::Signaling | Screen::Analytics => None, // handled by their own tasks
             };
             if let Some(result) = result {
                 match result {
@@ -192,6 +241,10 @@ async fn main() -> anyhow::Result<()> {
     let (stats_tx, mut stats_rx) = mpsc::channel::<Vec<BlockStats>>(4);
     let stats_client = client.clone();
 
+    // Analytics task channels and controls
+    let (analytics_tx, mut analytics_rx) = mpsc::channel::<BlockStats>(16);
+    let analytics_stop = Arc::new(AtomicBool::new(false));
+
     let mut node_data = NodeData::default();
     let mut signaling_data = NodeData::default();
     let mut block_stats_cache: HashMap<u64, BlockStats> = HashMap::new();
@@ -204,11 +257,17 @@ async fn main() -> anyhow::Result<()> {
     let mut selected_bit: u8 = 0;
     let mut show_bit_modal = false;
     let mut rpc_spinner: u8 = 0;
+    let mut analytics = AnalyticsData {
+        state: AnalyticsState::Idle,
+        stats: Vec::new(),
+        progress_current: 0,
+        progress_total: 0,
+    };
 
     let mut event_stream = EventStream::new();
 
     // Initial render
-    terminal.draw(|f| ui::draw(f, &node_data, peer_scroll, screen, selected_bit, show_bit_modal, rpc_spinner, &block_stats_cache, selected_block, show_block_modal, blocks_focused))?;
+    terminal.draw(|f| ui::draw(f, &node_data, peer_scroll, screen, selected_bit, show_bit_modal, rpc_spinner, &block_stats_cache, selected_block, show_block_modal, blocks_focused, &analytics))?;
 
     loop {
         let mut redraw = false;
@@ -248,10 +307,21 @@ async fn main() -> anyhow::Result<()> {
                 redraw = true;
             }
             Some(stats) = stats_rx.recv() => {
+                append_stats_to_file(&stats);
                 for s in stats {
                     block_stats_cache.insert(s.height, s);
                 }
                 rpc_spinner = rpc_spinner.wrapping_add(1);
+                redraw = true;
+            }
+            Some(stat) = analytics_rx.recv() => {
+                analytics.progress_current += 1;
+                analytics.stats.push(stat);
+                // Check if done
+                if analytics.progress_current >= analytics.progress_total {
+                    analytics.state = AnalyticsState::Done;
+                    analytics.stats.sort_by_key(|s| s.height);
+                }
                 redraw = true;
             }
             Some(Ok(event)) = event_stream.next() => {
@@ -281,18 +351,30 @@ async fn main() -> anyhow::Result<()> {
                             }
                         } else {
                             match key.code {
-                                KeyCode::Char('q') | KeyCode::Esc => break,
+                                KeyCode::Char('q') => break,
+                                KeyCode::Esc => {
+                                    if screen == Screen::Analytics && analytics.state == AnalyticsState::Running {
+                                        analytics_stop.store(true, Ordering::Relaxed);
+                                        analytics.state = AnalyticsState::Done;
+                                        analytics.stats.sort_by_key(|s| s.height);
+                                    } else {
+                                        break;
+                                    }
+                                }
                                 KeyCode::Tab => {
                                     screen = match screen {
                                         Screen::Dashboard => Screen::KnownPeers,
                                         Screen::KnownPeers => Screen::Signaling,
-                                        Screen::Signaling => Screen::Dashboard,
+                                        Screen::Signaling => Screen::Analytics,
+                                        Screen::Analytics => Screen::Dashboard,
                                     };
                                     current_screen.store(screen as u8, Ordering::Relaxed);
                                     if screen == Screen::Signaling {
                                         signaling_notify.notify_one();
                                     }
-                                    poll_notify.notify_one();
+                                    if screen != Screen::Analytics {
+                                        poll_notify.notify_one();
+                                    }
                                 }
                                 KeyCode::Down => {
                                     if screen == Screen::Signaling {
@@ -343,9 +425,55 @@ async fn main() -> anyhow::Result<()> {
                                 KeyCode::Char('r') => {
                                     if screen == Screen::Signaling {
                                         signaling_notify.notify_one();
-                                    } else {
+                                    } else if screen != Screen::Analytics {
                                         force_full_fetch.store(true, Ordering::Relaxed);
                                         poll_notify.notify_one();
+                                    }
+                                }
+                                KeyCode::Char('s') => {
+                                    if screen == Screen::Analytics && analytics.state != AnalyticsState::Running {
+                                        // Load existing data from jsonl
+                                        let mut existing = load_stats_from_file();
+                                        existing.sort_by_key(|s| s.height);
+                                        let existing_heights: std::collections::HashSet<u64> =
+                                            existing.iter().map(|s| s.height).collect();
+
+                                        // Determine range: go back 30 days (~4320 blocks) from tip
+                                        let tip = node_data.blockchain.blocks;
+                                        let start = tip.saturating_sub(4320);
+                                        let missing: Vec<u64> = (start..=tip)
+                                            .rev()
+                                            .filter(|h| !existing_heights.contains(h))
+                                            .collect();
+
+                                        analytics.stats = existing;
+                                        analytics.progress_current = 0;
+                                        analytics.progress_total = missing.len() as u64;
+
+                                        if missing.is_empty() {
+                                            analytics.state = AnalyticsState::Done;
+                                            analytics.stats.sort_by_key(|s| s.height);
+                                        } else {
+                                            analytics.state = AnalyticsState::Running;
+                                            analytics_stop.store(false, Ordering::Relaxed);
+                                            let c = client.clone();
+                                            let tx = analytics_tx.clone();
+                                            let stop = analytics_stop.clone();
+                                            tokio::spawn(async move {
+                                                for height in missing {
+                                                    if stop.load(Ordering::Relaxed) {
+                                                        break;
+                                                    }
+                                                    match c.fetch_block_stats_by_height(height).await {
+                                                        Ok(stat) => {
+                                                            append_stats_to_file(&[stat.clone()]);
+                                                            let _ = tx.send(stat).await;
+                                                        }
+                                                        Err(_) => {} // skip failed blocks
+                                                    }
+                                                }
+                                            });
+                                        }
                                     }
                                 }
                                 KeyCode::Char('d') => {
@@ -383,7 +511,7 @@ async fn main() -> anyhow::Result<()> {
             } else {
                 &node_data
             };
-            terminal.draw(|f| ui::draw(f, draw_data, peer_scroll, screen, selected_bit, show_bit_modal, rpc_spinner, &block_stats_cache, selected_block, show_block_modal, blocks_focused))?;
+            terminal.draw(|f| ui::draw(f, draw_data, peer_scroll, screen, selected_bit, show_bit_modal, rpc_spinner, &block_stats_cache, selected_block, show_block_modal, blocks_focused, &analytics))?;
         }
     }
 
