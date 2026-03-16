@@ -267,10 +267,14 @@ pub struct BlockStats {
     pub inscription_count: usize, // transactions with large witness data (ordinals envelope)
     pub rune_count: usize,      // transactions with Runes protocol OP_RETURN (OP_13)
     pub brc20_count: usize,     // inscription txs containing BRC-20 JSON
-    pub stamp_count: usize,     // transactions with bare multisig outputs (Stamps/SRC-20)
-    pub other_data_count: usize, // data txs not matching any known protocol
+    pub stamp_count: usize,        // transactions with bare multisig outputs (Stamps/SRC-20)
+    pub counterparty_count: usize, // OP_RETURN with CNTRPRTY prefix
+    pub omni_count: usize,         // OP_RETURN with omni prefix
+    pub other_data_count: usize,   // data txs not matching any known protocol
     pub oversized_opreturn_count: usize, // OP_RETURNs exceeding 83-byte limit
-    pub max_opreturn_size: usize, // largest OP_RETURN scriptPubKey in bytes
+    pub max_opreturn_size: usize,  // largest OP_RETURN scriptPubKey in bytes
+    pub taproot_spend_count: usize,  // txs spending from taproot inputs
+    pub taproot_output_count: usize, // txs creating taproot outputs
 }
 
 #[derive(Deserialize)]
@@ -487,9 +491,13 @@ impl RpcClient {
             let mut rune_count = 0usize;
             let mut brc20_count = 0usize;
             let mut stamp_count = 0usize;
+            let mut counterparty_count = 0usize;
+            let mut omni_count = 0usize;
             let mut oversized_opreturn_count = 0usize;
             let mut max_opreturn_size = 0usize;
             let mut data_tx_count = 0usize;
+            let mut taproot_spend_count = 0usize;
+            let mut taproot_output_count = 0usize;
 
             if let Some(txs) = txs {
                 tx_count = txs.len();
@@ -504,7 +512,10 @@ impl RpcClient {
 
                     let mut is_opreturn = false;
                     let mut is_rune = false;
+                    let mut is_counterparty = false;
+                    let mut is_omni = false;
                     let mut has_multisig = false;
+                    let mut has_taproot_output = false;
                     if let Some(outs) = tx["vout"].as_array() {
                         for o in outs {
                             let script_type = o["scriptPubKey"]["type"].as_str().unwrap_or("");
@@ -524,9 +535,21 @@ impl RpcClient {
                                 if script_hex.starts_with("6a5d") {
                                     is_rune = true;
                                 }
+                                // Counterparty: CNTRPRTY prefix → hex "434e545250525459"
+                                if script_hex.contains("434e545250525459") {
+                                    is_counterparty = true;
+                                }
+                                // Omni Layer: "omni" prefix → hex "6f6d6e69"
+                                if script_hex.contains("6f6d6e69") {
+                                    is_omni = true;
+                                }
                             }
                             if script_type == "multisig" {
                                 has_multisig = true;
+                            }
+                            // Taproot outputs (witness_v1_taproot)
+                            if script_type == "witness_v1_taproot" {
+                                has_taproot_output = true;
                             }
                         }
                     }
@@ -535,8 +558,15 @@ impl RpcClient {
                     // Look for OP_FALSE OP_IF OP_PUSH3 "ord" → hex "0063036f7264"
                     let mut is_inscription = false;
                     let mut is_brc20 = false;
+                    let mut has_taproot_spend = false;
                     if let Some(ins) = tx["vin"].as_array() {
                         for input in ins {
+                            // Taproot spend: prevout with witness_v1_taproot
+                            if input["prevout"]["scriptPubKey"]["type"].as_str()
+                                == Some("witness_v1_taproot")
+                            {
+                                has_taproot_spend = true;
+                            }
                             if let Some(witness) = input["txinwitness"].as_array() {
                                 for item in witness {
                                     if let Some(hex) = item.as_str() {
@@ -566,6 +596,10 @@ impl RpcClient {
                     if is_rune { rune_count += 1; }
                     if is_brc20 { brc20_count += 1; }
                     if is_stamp { stamp_count += 1; }
+                    if is_counterparty { counterparty_count += 1; }
+                    if is_omni { omni_count += 1; }
+                    if has_taproot_spend { taproot_spend_count += 1; }
+                    if has_taproot_output { taproot_output_count += 1; }
 
                     let is_data = is_opreturn || is_inscription || is_stamp;
                     if is_data {
@@ -575,10 +609,11 @@ impl RpcClient {
             }
 
             let financial_count = tx_count.saturating_sub(1).saturating_sub(data_tx_count); // exclude coinbase
-            // Other = data txs not classified as runes, inscriptions, or stamps
-            let other_data_count = data_tx_count.saturating_sub(
-                rune_count + inscription_count + stamp_count
-            );
+            // Other = data txs not classified as any known protocol
+            // Note: rune/counterparty/omni are subsets of opreturn, so we subtract known protocols
+            let classified_count = rune_count + counterparty_count + omni_count
+                + inscription_count + stamp_count;
+            let other_data_count = data_tx_count.saturating_sub(classified_count);
 
             all_stats.push(BlockStats {
                 height: *height,
@@ -591,9 +626,13 @@ impl RpcClient {
                 rune_count,
                 brc20_count,
                 stamp_count,
+                counterparty_count,
+                omni_count,
                 other_data_count,
                 oversized_opreturn_count,
                 max_opreturn_size,
+                taproot_spend_count,
+                taproot_output_count,
             });
         }
 

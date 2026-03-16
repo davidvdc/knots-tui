@@ -1326,7 +1326,7 @@ fn draw_bit_modal(f: &mut Frame, area: Rect, selected_bit: u8, data: &NodeData) 
 
 fn draw_block_modal(f: &mut Frame, area: Rect, block: &BlockInfo, stats: &BlockStats) {
     let modal_width = (area.width as f32 * 0.65) as u16;
-    let modal_height = 32u16.min(area.height - 4);
+    let modal_height = 36u16.min(area.height - 4);
     let x = (area.width.saturating_sub(modal_width)) / 2;
     let y = (area.height.saturating_sub(modal_height)) / 2;
     let modal_area = Rect::new(x, y, modal_width, modal_height);
@@ -1343,18 +1343,24 @@ fn draw_block_modal(f: &mut Frame, area: Rect, block: &BlockInfo, stats: &BlockS
     let fin_pct = pct(stats.financial_count);
     let data_pct = pct(data_count);
     let rune_pct = pct(stats.rune_count);
-    let inscription_pct = pct(stats.inscription_count);
     let brc20_pct = pct(stats.brc20_count);
     let stamp_pct = pct(stats.stamp_count);
+    let counterparty_pct = pct(stats.counterparty_count);
+    let omni_pct = pct(stats.omni_count);
     let other_pct = pct(stats.other_data_count);
     // Non-BRC20 inscriptions (other ordinals)
     let other_inscription_count = stats.inscription_count.saturating_sub(stats.brc20_count);
     let other_inscription_pct = pct(other_inscription_count);
-    // Non-Rune OP_RETURNs
-    let plain_opreturn = stats.opreturn_count.saturating_sub(stats.rune_count);
+    // Non-Rune/Counterparty/Omni OP_RETURNs
+    let plain_opreturn = stats.opreturn_count
+        .saturating_sub(stats.rune_count)
+        .saturating_sub(stats.counterparty_count)
+        .saturating_sub(stats.omni_count);
     let plain_opreturn_pct = pct(plain_opreturn);
+    let taproot_spend_pct = pct(stats.taproot_spend_count);
+    let taproot_output_pct = pct(stats.taproot_output_count);
 
-    let text = vec![
+    let mut text = vec![
         Line::from(vec![
             Span::styled("Total output:    ", Style::default().fg(Color::DarkGray)),
             Span::styled(format_btc(stats.total_out), Style::default().fg(Color::White).bold()),
@@ -1392,7 +1398,6 @@ fn draw_block_modal(f: &mut Frame, area: Rect, block: &BlockInfo, stats: &BlockS
                 format!("{} ({:.1}%)", stats.rune_count, rune_pct),
                 Style::default().fg(Color::Yellow),
             ),
-            Span::styled("  OP_RETURN with OP_13 tag", Style::default().fg(Color::DarkGray)),
         ]),
         Line::from(vec![
             Span::styled("  BRC-20:          ", Style::default().fg(Color::DarkGray)),
@@ -1400,7 +1405,6 @@ fn draw_block_modal(f: &mut Frame, area: Rect, block: &BlockInfo, stats: &BlockS
                 format!("{} ({:.1}%)", stats.brc20_count, brc20_pct),
                 Style::default().fg(Color::Magenta),
             ),
-            Span::styled("  inscription with \"brc-20\" payload", Style::default().fg(Color::DarkGray)),
         ]),
         Line::from(vec![
             Span::styled("  Inscriptions:    ", Style::default().fg(Color::DarkGray)),
@@ -1408,7 +1412,6 @@ fn draw_block_modal(f: &mut Frame, area: Rect, block: &BlockInfo, stats: &BlockS
                 format!("{} ({:.1}%)", other_inscription_count, other_inscription_pct),
                 Style::default().fg(Color::Magenta),
             ),
-            Span::styled("  ordinals envelope (excl. BRC-20)", Style::default().fg(Color::DarkGray)),
         ]),
         Line::from(vec![
             Span::styled("  Stamps:          ", Style::default().fg(Color::DarkGray)),
@@ -1416,15 +1419,34 @@ fn draw_block_modal(f: &mut Frame, area: Rect, block: &BlockInfo, stats: &BlockS
                 format!("{} ({:.1}%)", stats.stamp_count, stamp_pct),
                 Style::default().fg(Color::Red),
             ),
-            Span::styled("  bare multisig outputs", Style::default().fg(Color::DarkGray)),
         ]),
+    ];
+    // Only show Counterparty/Omni lines if they have non-zero counts
+    if stats.counterparty_count > 0 {
+        text.push(Line::from(vec![
+            Span::styled("  Counterparty:    ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!("{} ({:.1}%)", stats.counterparty_count, counterparty_pct),
+                Style::default().fg(Color::Yellow),
+            ),
+        ]));
+    }
+    if stats.omni_count > 0 {
+        text.push(Line::from(vec![
+            Span::styled("  Omni Layer:      ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!("{} ({:.1}%)", stats.omni_count, omni_pct),
+                Style::default().fg(Color::Yellow),
+            ),
+        ]));
+    }
+    text.extend_from_slice(&[
         Line::from(vec![
             Span::styled("  OP_RETURN other: ", Style::default().fg(Color::DarkGray)),
             Span::styled(
                 format!("{} ({:.1}%)", plain_opreturn, plain_opreturn_pct),
                 Style::default().fg(Color::Yellow),
             ),
-            Span::styled("  non-Rune nulldata", Style::default().fg(Color::DarkGray)),
         ]),
         Line::from(vec![
             Span::styled("  Other:           ", Style::default().fg(Color::DarkGray)),
@@ -1432,7 +1454,22 @@ fn draw_block_modal(f: &mut Frame, area: Rect, block: &BlockInfo, stats: &BlockS
                 format!("{} ({:.1}%)", stats.other_data_count, other_pct),
                 Style::default().fg(Color::DarkGray).bold(),
             ),
-            Span::styled("  unclassified data tx", Style::default().fg(Color::DarkGray)),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled("Taproot Usage", Style::default().fg(Color::Cyan).bold())),
+        Line::from(vec![
+            Span::styled("  Spending from:   ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!("{} ({:.1}%)", stats.taproot_spend_count, taproot_spend_pct),
+                Style::default().fg(Color::Cyan),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("  Creating to:     ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!("{} ({:.1}%)", stats.taproot_output_count, taproot_output_pct),
+                Style::default().fg(Color::Cyan),
+            ),
         ]),
         Line::from(""),
         Line::from(Span::styled("OP_RETURN Size Analysis", Style::default().fg(Color::Cyan).bold())),
@@ -1452,16 +1489,12 @@ fn draw_block_modal(f: &mut Frame, area: Rect, block: &BlockInfo, stats: &BlockS
                 Style::default().fg(if stats.max_opreturn_size > 83 { Color::Red } else { Color::White }).bold(),
             ),
         ]),
-        Line::from(Span::styled(
-            "  (Core pre-v29 / Knots limit: 83 bytes = OP_RETURN + 80 data)",
-            Style::default().fg(Color::DarkGray),
-        )),
         Line::from(""),
         Line::from(Span::styled(
             "↑/↓: prev/next block | Esc: close",
             Style::default().fg(Color::DarkGray),
         )),
-    ];
+    ]);
 
     let title = format!(" Block {} ", format_number(block.height));
     let modal_block = Block::default()
