@@ -1288,12 +1288,12 @@ fn draw_footer(f: &mut Frame, area: Rect, screen: Screen, rpc_spinner: u8) {
         Screen::Signaling => " q: quit | Tab: dashboard | ↑/↓: select bit | Enter: details | r: refresh ",
     };
 
-    const SPINNER: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-    let spinner_char = SPINNER[rpc_spinner as usize % SPINNER.len()];
+    const SPINNER: &[&str] = &[".  ", ".. ", "...", " ..", "  .", "   "];
+    let spinner_str = SPINNER[rpc_spinner as usize % SPINNER.len()];
 
     let footer = Paragraph::new(Line::from(vec![
         Span::styled(hints, Style::default().fg(Color::DarkGray)),
-        Span::styled(format!(" {} ", spinner_char), Style::default().fg(Color::DarkGray)),
+        Span::styled(format!("[{}]", spinner_str), Style::default().fg(Color::DarkGray)),
     ]))
     .alignment(Alignment::Center);
     f.render_widget(footer, area);
