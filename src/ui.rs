@@ -1342,23 +1342,25 @@ fn draw_block_modal(f: &mut Frame, area: Rect, block: &BlockInfo, stats: &BlockS
     };
     let fin_pct = pct(stats.financial_count);
     let data_pct = pct(data_count);
-    let rune_pct = pct(stats.rune_count);
-    let brc20_pct = pct(stats.brc20_count);
-    let stamp_pct = pct(stats.stamp_count);
-    let counterparty_pct = pct(stats.counterparty_count);
-    let omni_pct = pct(stats.omni_count);
-    let other_pct = pct(stats.other_data_count);
-    // Non-BRC20 inscriptions (other ordinals)
-    let other_inscription_count = stats.inscription_count.saturating_sub(stats.brc20_count);
-    let other_inscription_pct = pct(other_inscription_count);
-    // Non-Rune/Counterparty/Omni OP_RETURNs
-    let plain_opreturn = stats.opreturn_count
-        .saturating_sub(stats.rune_count)
-        .saturating_sub(stats.counterparty_count)
-        .saturating_sub(stats.omni_count);
-    let plain_opreturn_pct = pct(plain_opreturn);
     let taproot_spend_pct = pct(stats.taproot_spend_count);
     let taproot_output_pct = pct(stats.taproot_output_count);
+
+    // Yellow if non-zero, grey if zero
+    let proto_color = |count: usize| -> Color {
+        if count > 0 { Color::Yellow } else { Color::DarkGray }
+    };
+
+    // Protocol rows: (label, count)
+    let protocols: Vec<(&str, usize)> = vec![
+        ("Runes",          stats.rune_count),
+        ("BRC-20",         stats.brc20_count),
+        ("Inscriptions",   stats.inscription_count),
+        ("Stamps",         stats.stamp_count),
+        ("Counterparty",   stats.counterparty_count),
+        ("Omni Layer",     stats.omni_count),
+        ("OP_RETURN other", stats.opreturn_other_count),
+        ("Other",          stats.other_data_count),
+    ];
 
     let mut text = vec![
         Line::from(vec![
@@ -1392,83 +1394,31 @@ fn draw_block_modal(f: &mut Frame, area: Rect, block: &BlockInfo, stats: &BlockS
         ]),
         Line::from(""),
         Line::from(Span::styled("Protocol Breakdown", Style::default().fg(Color::Cyan).bold())),
-        Line::from(vec![
-            Span::styled("  Runes:           ", Style::default().fg(Color::DarkGray)),
-            Span::styled(
-                format!("{} ({:.1}%)", stats.rune_count, rune_pct),
-                Style::default().fg(Color::Yellow),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("  BRC-20:          ", Style::default().fg(Color::DarkGray)),
-            Span::styled(
-                format!("{} ({:.1}%)", stats.brc20_count, brc20_pct),
-                Style::default().fg(Color::Magenta),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("  Inscriptions:    ", Style::default().fg(Color::DarkGray)),
-            Span::styled(
-                format!("{} ({:.1}%)", other_inscription_count, other_inscription_pct),
-                Style::default().fg(Color::Magenta),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("  Stamps:          ", Style::default().fg(Color::DarkGray)),
-            Span::styled(
-                format!("{} ({:.1}%)", stats.stamp_count, stamp_pct),
-                Style::default().fg(Color::Red),
-            ),
-        ]),
     ];
-    // Only show Counterparty/Omni lines if they have non-zero counts
-    if stats.counterparty_count > 0 {
+    for (label, count) in &protocols {
         text.push(Line::from(vec![
-            Span::styled("  Counterparty:    ", Style::default().fg(Color::DarkGray)),
+            Span::styled(format!("  {:17}", format!("{}:", label)), Style::default().fg(Color::DarkGray)),
             Span::styled(
-                format!("{} ({:.1}%)", stats.counterparty_count, counterparty_pct),
-                Style::default().fg(Color::Yellow),
-            ),
-        ]));
-    }
-    if stats.omni_count > 0 {
-        text.push(Line::from(vec![
-            Span::styled("  Omni Layer:      ", Style::default().fg(Color::DarkGray)),
-            Span::styled(
-                format!("{} ({:.1}%)", stats.omni_count, omni_pct),
-                Style::default().fg(Color::Yellow),
+                format!("{} ({:.1}%)", count, pct(*count)),
+                Style::default().fg(proto_color(*count)),
             ),
         ]));
     }
     text.extend_from_slice(&[
-        Line::from(vec![
-            Span::styled("  OP_RETURN other: ", Style::default().fg(Color::DarkGray)),
-            Span::styled(
-                format!("{} ({:.1}%)", plain_opreturn, plain_opreturn_pct),
-                Style::default().fg(Color::Yellow),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("  Other:           ", Style::default().fg(Color::DarkGray)),
-            Span::styled(
-                format!("{} ({:.1}%)", stats.other_data_count, other_pct),
-                Style::default().fg(Color::DarkGray).bold(),
-            ),
-        ]),
         Line::from(""),
         Line::from(Span::styled("Taproot Usage", Style::default().fg(Color::Cyan).bold())),
         Line::from(vec![
             Span::styled("  Spending from:   ", Style::default().fg(Color::DarkGray)),
             Span::styled(
                 format!("{} ({:.1}%)", stats.taproot_spend_count, taproot_spend_pct),
-                Style::default().fg(Color::Cyan),
+                Style::default().fg(proto_color(stats.taproot_spend_count)),
             ),
         ]),
         Line::from(vec![
             Span::styled("  Creating to:     ", Style::default().fg(Color::DarkGray)),
             Span::styled(
                 format!("{} ({:.1}%)", stats.taproot_output_count, taproot_output_pct),
-                Style::default().fg(Color::Cyan),
+                Style::default().fg(proto_color(stats.taproot_output_count)),
             ),
         ]),
         Line::from(""),

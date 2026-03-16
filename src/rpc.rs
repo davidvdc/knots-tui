@@ -259,18 +259,20 @@ pub struct BlockInfo {
 #[derive(Default, Clone, Debug)]
 pub struct BlockStats {
     pub height: u64,
-    pub total_out: u64,         // total BTC output in satoshis
-    pub total_fee: u64,         // total fees in satoshis
-    pub tx_count: usize,        // total transactions (incl coinbase)
-    pub financial_count: usize, // financial transactions
-    pub opreturn_count: usize,  // transactions with OP_RETURN outputs
-    pub inscription_count: usize, // transactions with large witness data (ordinals envelope)
-    pub rune_count: usize,      // transactions with Runes protocol OP_RETURN (OP_13)
-    pub brc20_count: usize,     // inscription txs containing BRC-20 JSON
-    pub stamp_count: usize,        // transactions with bare multisig outputs (Stamps/SRC-20)
+    pub total_out: u64,           // total BTC output in satoshis
+    pub total_fee: u64,           // total fees in satoshis
+    pub tx_count: usize,          // total transactions (incl coinbase)
+    pub financial_count: usize,   // financial transactions (no data patterns)
+    // Mutually exclusive protocol categories (each tx counted once):
+    pub rune_count: usize,        // OP_RETURN with OP_13 tag
+    pub brc20_count: usize,       // inscription with "brc-20" payload
+    pub inscription_count: usize, // ordinals envelope (excl. BRC-20)
+    pub stamp_count: usize,       // bare multisig (no OP_RETURN/inscription)
     pub counterparty_count: usize, // OP_RETURN with CNTRPRTY prefix
-    pub omni_count: usize,         // OP_RETURN with omni prefix
-    pub other_data_count: usize,   // data txs not matching any known protocol
+    pub omni_count: usize,        // OP_RETURN with omni prefix
+    pub opreturn_other_count: usize, // OP_RETURN not matching known protocols
+    pub other_data_count: usize,  // unclassified data tx
+    // Non-exclusive metrics:
     pub oversized_opreturn_count: usize, // OP_RETURNs exceeding 83-byte limit
     pub max_opreturn_size: usize,  // largest OP_RETURN scriptPubKey in bytes
     pub taproot_spend_count: usize,  // txs spending from taproot inputs
@@ -486,16 +488,19 @@ impl RpcClient {
 
             let txs = batch[1]["tx"].as_array();
             let mut tx_count = 0usize;
-            let mut opreturn_count = 0usize;
-            let mut inscription_count = 0usize;
+            // Mutually exclusive protocol buckets:
             let mut rune_count = 0usize;
             let mut brc20_count = 0usize;
+            let mut inscription_count = 0usize; // ordinals excl. BRC-20
             let mut stamp_count = 0usize;
             let mut counterparty_count = 0usize;
             let mut omni_count = 0usize;
+            let mut opreturn_other_count = 0usize;
+            let mut other_data_count = 0usize;
+            let mut financial_count = 0usize;
+            // Non-exclusive metrics:
             let mut oversized_opreturn_count = 0usize;
             let mut max_opreturn_size = 0usize;
-            let mut data_tx_count = 0usize;
             let mut taproot_spend_count = 0usize;
             let mut taproot_output_count = 0usize;
 
@@ -510,17 +515,18 @@ impl RpcClient {
                         continue;
                     }
 
-                    let mut is_opreturn = false;
-                    let mut is_rune = false;
-                    let mut is_counterparty = false;
-                    let mut is_omni = false;
+                    // --- Scan outputs ---
+                    let mut has_opreturn = false;
+                    let mut has_rune = false;
+                    let mut has_counterparty = false;
+                    let mut has_omni = false;
                     let mut has_multisig = false;
                     let mut has_taproot_output = false;
                     if let Some(outs) = tx["vout"].as_array() {
                         for o in outs {
                             let script_type = o["scriptPubKey"]["type"].as_str().unwrap_or("");
                             if script_type == "nulldata" {
-                                is_opreturn = true;
+                                has_opreturn = true;
                                 let script_hex = o["scriptPubKey"]["hex"]
                                     .as_str()
                                     .unwrap_or("");
@@ -531,37 +537,31 @@ impl RpcClient {
                                 if script_size > 83 {
                                     oversized_opreturn_count += 1;
                                 }
-                                // Runes: OP_RETURN OP_13 → hex starts with "6a5d"
                                 if script_hex.starts_with("6a5d") {
-                                    is_rune = true;
+                                    has_rune = true;
                                 }
-                                // Counterparty: CNTRPRTY prefix → hex "434e545250525459"
                                 if script_hex.contains("434e545250525459") {
-                                    is_counterparty = true;
+                                    has_counterparty = true;
                                 }
-                                // Omni Layer: "omni" prefix → hex "6f6d6e69"
                                 if script_hex.contains("6f6d6e69") {
-                                    is_omni = true;
+                                    has_omni = true;
                                 }
                             }
                             if script_type == "multisig" {
                                 has_multisig = true;
                             }
-                            // Taproot outputs (witness_v1_taproot)
                             if script_type == "witness_v1_taproot" {
                                 has_taproot_output = true;
                             }
                         }
                     }
 
-                    // Inscription detection: witness envelope with "ord" marker
-                    // Look for OP_FALSE OP_IF OP_PUSH3 "ord" → hex "0063036f7264"
-                    let mut is_inscription = false;
-                    let mut is_brc20 = false;
+                    // --- Scan inputs/witness ---
+                    let mut has_inscription = false;
+                    let mut has_brc20 = false;
                     let mut has_taproot_spend = false;
                     if let Some(ins) = tx["vin"].as_array() {
                         for input in ins {
-                            // Taproot spend: prevout with witness_v1_taproot
                             if input["prevout"]["scriptPubKey"]["type"].as_str()
                                 == Some("witness_v1_taproot")
                             {
@@ -570,17 +570,13 @@ impl RpcClient {
                             if let Some(witness) = input["txinwitness"].as_array() {
                                 for item in witness {
                                     if let Some(hex) = item.as_str() {
-                                        // Ordinals envelope marker
                                         if hex.contains("0063036f7264") {
-                                            is_inscription = true;
-                                            // BRC-20: inscription contains "brc-20" in content
-                                            // hex-encoded "brc-20" = "6272632d3230"
+                                            has_inscription = true;
                                             if hex.contains("6272632d3230") {
-                                                is_brc20 = true;
+                                                has_brc20 = true;
                                             }
                                         } else if hex.len() > 1040 {
-                                            // Fallback: large witness item without ord envelope
-                                            is_inscription = true;
+                                            has_inscription = true;
                                         }
                                     }
                                 }
@@ -588,32 +584,38 @@ impl RpcClient {
                         }
                     }
 
-                    // Stamps: bare multisig outputs used for data embedding
-                    let is_stamp = has_multisig && !is_opreturn && !is_inscription;
-
-                    if is_opreturn { opreturn_count += 1; }
-                    if is_inscription { inscription_count += 1; }
-                    if is_rune { rune_count += 1; }
-                    if is_brc20 { brc20_count += 1; }
-                    if is_stamp { stamp_count += 1; }
-                    if is_counterparty { counterparty_count += 1; }
-                    if is_omni { omni_count += 1; }
+                    // --- Taproot (non-exclusive, counted independently) ---
                     if has_taproot_spend { taproot_spend_count += 1; }
                     if has_taproot_output { taproot_output_count += 1; }
 
-                    let is_data = is_opreturn || is_inscription || is_stamp;
-                    if is_data {
-                        data_tx_count += 1;
+                    // --- Classify into exactly one bucket (priority order) ---
+                    if has_brc20 {
+                        brc20_count += 1;
+                    } else if has_inscription {
+                        inscription_count += 1;
+                    } else if has_rune {
+                        rune_count += 1;
+                    } else if has_counterparty {
+                        counterparty_count += 1;
+                    } else if has_omni {
+                        omni_count += 1;
+                    } else if has_multisig && !has_opreturn {
+                        stamp_count += 1;
+                    } else if has_opreturn {
+                        opreturn_other_count += 1;
+                    } else {
+                        financial_count += 1;
+                        continue; // not a data tx
                     }
                 }
             }
 
-            let financial_count = tx_count.saturating_sub(1).saturating_sub(data_tx_count); // exclude coinbase
-            // Other = data txs not classified as any known protocol
-            // Note: rune/counterparty/omni are subsets of opreturn, so we subtract known protocols
-            let classified_count = rune_count + counterparty_count + omni_count
-                + inscription_count + stamp_count;
-            let other_data_count = data_tx_count.saturating_sub(classified_count);
+            let user_tx = tx_count.saturating_sub(1); // exclude coinbase
+            let data_count = rune_count + brc20_count + inscription_count
+                + stamp_count + counterparty_count + omni_count
+                + opreturn_other_count;
+            // Sanity: if there are more data txs than user txs, clamp
+            let financial_count = user_tx.saturating_sub(data_count);
 
             all_stats.push(BlockStats {
                 height: *height,
@@ -621,14 +623,14 @@ impl RpcClient {
                 total_fee,
                 tx_count,
                 financial_count,
-                opreturn_count,
-                inscription_count,
                 rune_count,
                 brc20_count,
+                inscription_count,
                 stamp_count,
                 counterparty_count,
                 omni_count,
-                other_data_count,
+                opreturn_other_count,
+                other_data_count: 0, // no unclassified with exhaustive matching
                 oversized_opreturn_count,
                 max_opreturn_size,
                 taproot_spend_count,
