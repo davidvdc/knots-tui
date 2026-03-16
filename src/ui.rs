@@ -1,9 +1,9 @@
-use crate::rpc::NodeData;
+use crate::rpc::{BlockInfo, BlockStats, NodeData};
 use crate::Screen;
 use ratatui::{prelude::*, widgets::*};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
-pub fn draw(f: &mut Frame, data: &NodeData, peer_scroll: u16, block_scroll: u16, screen: Screen, selected_bit: u8, show_bit_modal: bool, rpc_spinner: u8) {
+pub fn draw(f: &mut Frame, data: &NodeData, peer_scroll: u16, screen: Screen, selected_bit: u8, show_bit_modal: bool, rpc_spinner: u8, block_stats: &HashMap<u64, BlockStats>, selected_block: u8, show_block_modal: bool, blocks_focused: bool) {
     let area = f.area();
 
     let outer = Layout::default()
@@ -17,7 +17,7 @@ pub fn draw(f: &mut Frame, data: &NodeData, peer_scroll: u16, block_scroll: u16,
 
     draw_header(f, outer[0], data, screen);
     match screen {
-        Screen::Dashboard => draw_body(f, outer[1], data, peer_scroll, block_scroll),
+        Screen::Dashboard => draw_body(f, outer[1], data, peer_scroll, block_stats, selected_block, blocks_focused),
         Screen::KnownPeers => draw_known_peers(f, outer[1], data, peer_scroll),
         Screen::Signaling => draw_signaling(f, outer[1], data, selected_bit),
     }
@@ -25,6 +25,13 @@ pub fn draw(f: &mut Frame, data: &NodeData, peer_scroll: u16, block_scroll: u16,
 
     if show_bit_modal && screen == Screen::Signaling {
         draw_bit_modal(f, area, selected_bit, data);
+    }
+    if show_block_modal && screen == Screen::Dashboard {
+        if let Some(b) = data.recent_blocks.get(selected_block as usize) {
+            if let Some(s) = block_stats.get(&b.height) {
+                draw_block_modal(f, area, b, s);
+            }
+        }
     }
 }
 
@@ -67,7 +74,7 @@ fn draw_header(f: &mut Frame, area: Rect, data: &NodeData, screen: Screen) {
     f.render_widget(header, area);
 }
 
-fn draw_body(f: &mut Frame, area: Rect, data: &NodeData, peer_scroll: u16, block_scroll: u16) {
+fn draw_body(f: &mut Frame, area: Rect, data: &NodeData, peer_scroll: u16, block_stats: &HashMap<u64, BlockStats>, selected_block: u8, blocks_focused: bool) {
     if let Some(ref err) = data.error {
         let err_block = Block::default()
             .borders(Borders::ALL)
@@ -116,8 +123,8 @@ fn draw_body(f: &mut Frame, area: Rect, data: &NodeData, peer_scroll: u16, block
         ])
         .split(rows[1]);
 
-    draw_blocks_table(f, bottom_rows[0], data, block_scroll);
-    draw_peers_table(f, bottom_rows[1], data, peer_scroll);
+    draw_blocks_table(f, bottom_rows[0], data, block_stats, selected_block, blocks_focused);
+    draw_peers_table(f, bottom_rows[1], data, peer_scroll, !blocks_focused);
 }
 
 fn draw_blockchain_card(f: &mut Frame, area: Rect, data: &NodeData) {
@@ -394,7 +401,7 @@ fn draw_mining_card(f: &mut Frame, area: Rect, data: &NodeData) {
     f.render_widget(paragraph, area);
 }
 
-fn draw_peers_table(f: &mut Frame, area: Rect, data: &NodeData, scroll: u16) {
+fn draw_peers_table(f: &mut Frame, area: Rect, data: &NodeData, scroll: u16, focused: bool) {
     let header = Row::new(vec![
         "ID", "Address", "Client", "Type", "TX", "Dir", "Height",
         "Ping", "Conn", "Sent", "Recv",
@@ -459,14 +466,16 @@ fn draw_peers_table(f: &mut Frame, area: Rect, data: &NodeData, scroll: u16) {
         Constraint::Length(8),
     ];
 
+    let border_color = if focused { Color::Yellow } else { Color::default() };
     let table = Table::new(rows, widths)
         .header(header)
         .block(
             Block::default()
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(border_color))
                 .title(format!(
-                    " Peers ({}) | known: {} [j/k scroll] ",
+                    " Peers ({}) | known: {} ",
                     data.peers.len(),
                     format_number(data.known_peers)
                 ))
@@ -479,8 +488,15 @@ fn draw_peers_table(f: &mut Frame, area: Rect, data: &NodeData, scroll: u16) {
     f.render_stateful_widget(table, area, &mut state);
 }
 
-fn draw_blocks_table(f: &mut Frame, area: Rect, data: &NodeData, block_scroll: u16) {
-    let header = Row::new(vec!["Height", "TXs", "Size", "Weight", "Age", "BIP110"])
+fn draw_blocks_table(f: &mut Frame, area: Rect, data: &NodeData, block_stats: &HashMap<u64, BlockStats>, selected_block: u8, focused: bool) {
+    let has_stats = data.recent_blocks.iter().any(|b| block_stats.contains_key(&b.height));
+
+    let header_cells = if has_stats {
+        vec![" ", "Height", "TXs", "Size", "Weight", "Age", "BIP110", "BTC Out", "Fees", "Fin%", ">83B"]
+    } else {
+        vec![" ", "Height", "TXs", "Size", "Weight", "Age", "BIP110"]
+    };
+    let header = Row::new(header_cells)
         .style(Style::default().fg(Color::Cyan).bold())
         .bottom_margin(0);
 
@@ -489,38 +505,100 @@ fn draw_blocks_table(f: &mut Frame, area: Rect, data: &NodeData, block_scroll: u
     let rows: Vec<Row> = data
         .recent_blocks
         .iter()
-        .map(|b| {
+        .enumerate()
+        .map(|(i, b)| {
             let age = if b.time > 0 && now > b.time {
                 format_duration(now - b.time)
             } else {
                 "-".to_string()
             };
-            // BIP110 (reduced_data) signals on bit 4 with BIP9 version prefix
             let bip110 = if b.version >= 0x20000000 && b.version & (1 << 4) != 0 {
                 "yes"
             } else {
                 "no"
             };
             let bip110_color = if bip110 == "yes" { Color::Green } else { Color::DarkGray };
-            Row::new(vec![
-                Cell::from(format_number(b.height)),
-                Cell::from(format_number(b.tx_count as u64)),
-                Cell::from(format_bytes_short(b.size)),
-                Cell::from(format!("{:.1} kvWU", b.weight as f64 / 1000.0)),
-                Cell::from(age),
-                Cell::from(Span::styled(bip110.to_string(), Style::default().fg(bip110_color))),
-            ])
+
+            let marker = if focused && i == selected_block as usize { ">" } else { " " };
+
+            if has_stats {
+                let (btc_out, fees, financial, fin_color, oversized) = if let Some(s) = block_stats.get(&b.height) {
+                    let user_tx = s.tx_count.saturating_sub(1);
+                    let pct = if user_tx > 0 {
+                        (s.financial_count as f64 / user_tx as f64) * 100.0
+                    } else {
+                        100.0
+                    };
+                    let color = if pct >= 90.0 { Color::Green } else if pct >= 70.0 { Color::Yellow } else { Color::Red };
+                    let os = format!("{}", s.oversized_opreturn_count);
+                    (format_btc(s.total_out), format_btc_fees(s.total_fee), format!("{:.0}%", pct), color, os)
+                } else {
+                    ("-".to_string(), "-".to_string(), "-".to_string(), Color::DarkGray, "-".to_string())
+                };
+                let os_color = if let Some(s) = block_stats.get(&b.height) {
+                    if s.oversized_opreturn_count > 0 { Color::Red } else { Color::Green }
+                } else {
+                    Color::DarkGray
+                };
+                Row::new(vec![
+                    Cell::from(Span::styled(marker, Style::default().fg(Color::Yellow))),
+                    Cell::from(format_number(b.height)),
+                    Cell::from(format_number(b.tx_count as u64)),
+                    Cell::from(format_bytes_short(b.size)),
+                    Cell::from(format!("{:.1} kvWU", b.weight as f64 / 1000.0)),
+                    Cell::from(age),
+                    Cell::from(Span::styled(bip110.to_string(), Style::default().fg(bip110_color))),
+                    Cell::from(btc_out),
+                    Cell::from(fees),
+                    Cell::from(Span::styled(financial, Style::default().fg(fin_color))),
+                    Cell::from(Span::styled(oversized, Style::default().fg(os_color))),
+                ])
+            } else {
+                Row::new(vec![
+                    Cell::from(Span::styled(marker, Style::default().fg(Color::Yellow))),
+                    Cell::from(format_number(b.height)),
+                    Cell::from(format_number(b.tx_count as u64)),
+                    Cell::from(format_bytes_short(b.size)),
+                    Cell::from(format!("{:.1} kvWU", b.weight as f64 / 1000.0)),
+                    Cell::from(age),
+                    Cell::from(Span::styled(bip110.to_string(), Style::default().fg(bip110_color))),
+                ])
+            }
         })
         .collect();
 
-    let widths = [
-        Constraint::Length(10),
-        Constraint::Length(7),
-        Constraint::Length(10),
-        Constraint::Length(12),
-        Constraint::Length(12),
-        Constraint::Min(6),
-    ];
+    let widths = if has_stats {
+        vec![
+            Constraint::Length(2),
+            Constraint::Length(10),
+            Constraint::Length(7),
+            Constraint::Length(10),
+            Constraint::Length(12),
+            Constraint::Length(12),
+            Constraint::Length(7),
+            Constraint::Length(12),
+            Constraint::Length(12),
+            Constraint::Length(5),
+            Constraint::Min(4),
+        ]
+    } else {
+        vec![
+            Constraint::Length(2),
+            Constraint::Length(10),
+            Constraint::Length(7),
+            Constraint::Length(10),
+            Constraint::Length(12),
+            Constraint::Length(12),
+            Constraint::Min(6),
+        ]
+    };
+
+    let title = if has_stats {
+        " Recent Blocks [Enter: detail] "
+    } else {
+        " Recent Blocks [d: load details] "
+    };
+    let border_color = if focused { Color::Yellow } else { Color::default() };
 
     let table = Table::new(rows, widths)
         .header(header)
@@ -528,12 +606,12 @@ fn draw_blocks_table(f: &mut Frame, area: Rect, data: &NodeData, block_scroll: u
             Block::default()
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
-                .title(" Recent Blocks [J/K scroll] ")
+                .border_style(Style::default().fg(border_color))
+                .title(title)
                 .title_style(Style::default().fg(Color::Yellow).bold()),
         );
 
-    let mut state = TableState::default().with_offset(block_scroll as usize);
-    f.render_stateful_widget(table, area, &mut state);
+    f.render_widget(table, area);
 }
 
 fn draw_known_peers(f: &mut Frame, area: Rect, data: &NodeData, scroll: u16) {
@@ -1281,9 +1359,131 @@ fn draw_bit_modal(f: &mut Frame, area: Rect, selected_bit: u8, data: &NodeData) 
     f.render_widget(paragraph, modal_area);
 }
 
+fn draw_block_modal(f: &mut Frame, area: Rect, block: &BlockInfo, stats: &BlockStats) {
+    let modal_width = (area.width as f32 * 0.65) as u16;
+    let modal_height = 24u16.min(area.height - 4);
+    let x = (area.width.saturating_sub(modal_width)) / 2;
+    let y = (area.height.saturating_sub(modal_height)) / 2;
+    let modal_area = Rect::new(x, y, modal_width, modal_height);
+
+    let dim = Block::default().style(Style::default().bg(Color::Black));
+    f.render_widget(Clear, modal_area);
+    f.render_widget(dim, area);
+
+    let user_tx = stats.tx_count.saturating_sub(1); // exclude coinbase
+    let data_count = stats.opreturn_count + stats.inscription_count;
+    let pct = |count: usize| -> f64 {
+        if user_tx > 0 { (count as f64 / user_tx as f64) * 100.0 } else { 0.0 }
+    };
+    let fin_pct = pct(stats.financial_count);
+    let opreturn_pct = pct(stats.opreturn_count);
+    let inscription_pct = pct(stats.inscription_count);
+    let data_pct = pct(data_count);
+
+    let text = vec![
+        Line::from(vec![
+            Span::styled("Total output:    ", Style::default().fg(Color::DarkGray)),
+            Span::styled(format_btc(stats.total_out), Style::default().fg(Color::White).bold()),
+        ]),
+        Line::from(vec![
+            Span::styled("Total fees:      ", Style::default().fg(Color::DarkGray)),
+            Span::styled(format_btc_fees(stats.total_fee), Style::default().fg(Color::White).bold()),
+        ]),
+        Line::from(vec![
+            Span::styled("Transactions:    ", Style::default().fg(Color::DarkGray)),
+            Span::styled(format!("{}", user_tx), Style::default().fg(Color::White).bold()),
+            Span::styled("  (excl. coinbase)", Style::default().fg(Color::DarkGray)),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled("Transaction Breakdown", Style::default().fg(Color::Cyan).bold())),
+        Line::from(vec![
+            Span::styled("  Financial:     ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!("{} ({:.1}%)", stats.financial_count, fin_pct),
+                Style::default().fg(Color::Green).bold(),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("  Data/spam:     ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!("{} ({:.1}%)", data_count, data_pct),
+                Style::default().fg(if data_pct > 10.0 { Color::Red } else { Color::Yellow }).bold(),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("    OP_RETURN:   ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!("{} ({:.1}%)", stats.opreturn_count, opreturn_pct),
+                Style::default().fg(Color::Yellow),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("    Inscriptions:", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!(" {} ({:.1}%)", stats.inscription_count, inscription_pct),
+                Style::default().fg(Color::Magenta),
+            ),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled("OP_RETURN Size Analysis", Style::default().fg(Color::Cyan).bold())),
+        Line::from(vec![
+            Span::styled("  Oversized (>83 bytes): ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!("{}", stats.oversized_opreturn_count),
+                Style::default().fg(if stats.oversized_opreturn_count > 0 { Color::Red } else { Color::Green }).bold(),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("  Largest OP_RETURN:     ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                if stats.max_opreturn_size > 0 {
+                    format!("{} bytes", stats.max_opreturn_size)
+                } else {
+                    "n/a".to_string()
+                },
+                Style::default().fg(if stats.max_opreturn_size > 83 { Color::Red } else { Color::White }).bold(),
+            ),
+        ]),
+        Line::from(Span::styled(
+            "  (Core pre-v29 / Knots limit: 83 bytes = OP_RETURN + 80 data)",
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(""),
+        Line::from(Span::styled("Classification:", Style::default().fg(Color::Cyan).bold())),
+        Line::from(Span::styled(
+            "  OP_RETURN = nulldata outputs (data embedding, tokens, anchors)",
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(Span::styled(
+            "  Inscriptions = witness items > 520 bytes (ordinals, BRC-20)",
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            "↑/↓: prev/next block | Esc: close",
+            Style::default().fg(Color::DarkGray),
+        )),
+    ];
+
+    let title = format!(" Block {} ", format_number(block.height));
+    let modal_block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Double)
+        .title(title)
+        .title_style(Style::default().fg(Color::Cyan).bold())
+        .style(Style::default().bg(Color::Black));
+
+    let paragraph = Paragraph::new(text)
+        .block(modal_block)
+        .wrap(Wrap { trim: false });
+
+    f.render_widget(Clear, modal_area);
+    f.render_widget(paragraph, modal_area);
+}
+
 fn draw_footer(f: &mut Frame, area: Rect, screen: Screen, rpc_spinner: u8) {
     let hints = match screen {
-        Screen::Dashboard => " q: quit | Tab: known peers | j/k: scroll peers | J/K: scroll blocks ",
+        Screen::Dashboard => " q: quit | Tab: switch screen | j/k: switch table | ↑/↓: navigate ",
         Screen::KnownPeers => " q: quit | Tab: signaling | ↑/↓: scroll services | r: refresh ",
         Screen::Signaling => " q: quit | Tab: dashboard | ↑/↓: select bit | Enter: details | r: refresh ",
     };
@@ -1300,6 +1500,20 @@ fn draw_footer(f: &mut Frame, area: Rect, screen: Screen, rpc_spinner: u8) {
 }
 
 // --- Formatting helpers ---
+
+fn format_btc(satoshis: u64) -> String {
+    let btc = satoshis as f64 / 100_000_000.0;
+    if btc >= 1000.0 {
+        format!("{:.0} BTC", btc)
+    } else {
+        format!("{:.2} BTC", btc)
+    }
+}
+
+fn format_btc_fees(satoshis: u64) -> String {
+    let btc = satoshis as f64 / 100_000_000.0;
+    format!("{:.3} BTC", btc)
+}
 
 fn format_number(n: u64) -> String {
     let s = n.to_string();

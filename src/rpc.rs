@@ -28,6 +28,7 @@ pub struct NodeData {
     pub known_peers: u64,
     pub known_addresses: Vec<KnownAddress>,
     pub softforks: BTreeMap<String, SoftFork>,
+    pub block_stats: Vec<BlockStats>,
     pub recent_block_versions: Vec<(u64, i64)>, // (height, version)
 }
 
@@ -255,6 +256,19 @@ pub struct BlockInfo {
     pub version: i64,
 }
 
+#[derive(Default, Clone, Debug)]
+pub struct BlockStats {
+    pub height: u64,
+    pub total_out: u64,         // total BTC output in satoshis
+    pub total_fee: u64,         // total fees in satoshis
+    pub tx_count: usize,        // total transactions (incl coinbase)
+    pub financial_count: usize, // financial transactions
+    pub opreturn_count: usize,  // transactions with OP_RETURN outputs
+    pub inscription_count: usize, // transactions with large witness data
+    pub oversized_opreturn_count: usize, // OP_RETURNs exceeding 83-byte limit
+    pub max_opreturn_size: usize, // largest OP_RETURN scriptPubKey in bytes
+}
+
 #[derive(Deserialize)]
 struct RpcResponse {
     result: Option<Value>,
@@ -433,6 +447,104 @@ impl RpcClient {
             known_peers,
             ..Default::default()
         })
+    }
+
+    pub async fn fetch_block_stats(&self, hashes: &[(u64, String)]) -> Result<Vec<BlockStats>, String> {
+        let mut all_stats = Vec::new();
+
+        for (height, hash) in hashes {
+            // Fetch getblockstats (lightweight) and getblock verbosity 2 (full tx data)
+            let stats_fields = json!(["total_out", "totalfee"]);
+            let batch = self.batch_call(&[
+                ("getblockstats", json!([hash, stats_fields])),
+                ("getblock", json!([hash, 2])),
+            ]).await?;
+
+            let total_out = batch[0]["total_out"].as_u64().unwrap_or(0);
+            let total_fee = batch[0]["totalfee"].as_u64().unwrap_or(0);
+
+            let txs = batch[1]["tx"].as_array();
+            let mut tx_count = 0usize;
+            let mut opreturn_count = 0usize;
+            let mut inscription_count = 0usize;
+            let mut oversized_opreturn_count = 0usize;
+            let mut max_opreturn_size = 0usize;
+            let mut data_tx_count = 0usize;
+
+            if let Some(txs) = txs {
+                tx_count = txs.len();
+                for tx in txs {
+                    let is_coinbase = tx["vin"]
+                        .as_array()
+                        .map(|v| v.iter().any(|i| !i["coinbase"].is_null()))
+                        .unwrap_or(false);
+                    if is_coinbase {
+                        continue;
+                    }
+
+                    let mut is_opreturn = false;
+                    if let Some(outs) = tx["vout"].as_array() {
+                        for o in outs {
+                            if o["scriptPubKey"]["type"].as_str() == Some("nulldata") {
+                                is_opreturn = true;
+                                // scriptPubKey hex: 2 hex chars per byte
+                                let script_size = o["scriptPubKey"]["hex"]
+                                    .as_str()
+                                    .map(|s| s.len() / 2)
+                                    .unwrap_or(0);
+                                if script_size > max_opreturn_size {
+                                    max_opreturn_size = script_size;
+                                }
+                                // Core's old standard limit: 83 bytes (OP_RETURN + push + 80 bytes data)
+                                if script_size > 83 {
+                                    oversized_opreturn_count += 1;
+                                }
+                            }
+                        }
+                    }
+
+                    let is_inscription = tx["vin"]
+                        .as_array()
+                        .map(|ins| {
+                            ins.iter().any(|i| {
+                                i["txinwitness"]
+                                    .as_array()
+                                    .map(|w| w.iter().any(|item| {
+                                        item.as_str().map(|s| s.len() > 1040).unwrap_or(false)
+                                    }))
+                                    .unwrap_or(false)
+                            })
+                        })
+                        .unwrap_or(false);
+
+                    if is_opreturn {
+                        opreturn_count += 1;
+                    }
+                    if is_inscription {
+                        inscription_count += 1;
+                    }
+                    if is_opreturn || is_inscription {
+                        data_tx_count += 1;
+                    }
+                }
+            }
+
+            let financial_count = tx_count.saturating_sub(1).saturating_sub(data_tx_count); // exclude coinbase
+
+            all_stats.push(BlockStats {
+                height: *height,
+                total_out,
+                total_fee,
+                tx_count,
+                financial_count,
+                opreturn_count,
+                inscription_count,
+                oversized_opreturn_count,
+                max_opreturn_size,
+            });
+        }
+
+        Ok(all_stats)
     }
 
     pub async fn fetch_known_peers(&self) -> Result<NodeData, String> {

@@ -9,13 +9,14 @@ use crossterm::{
 };
 use futures::StreamExt;
 use ratatui::prelude::*;
+use std::collections::HashMap;
 use std::io::stdout;
 use std::sync::atomic::{AtomicU8, AtomicU16, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{mpsc, Notify};
 
-use rpc::{NodeData, RpcClient};
+use rpc::{BlockStats, NodeData, RpcClient};
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum Screen {
@@ -144,10 +145,16 @@ async fn main() -> anyhow::Result<()> {
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
     terminal.clear()?;
 
+    let (stats_tx, mut stats_rx) = mpsc::channel::<Vec<BlockStats>>(4);
+    let stats_client = client.clone();
+
     let mut node_data = NodeData::default();
     let mut signaling_data = NodeData::default();
+    let mut block_stats_cache: HashMap<u64, BlockStats> = HashMap::new();
     let mut peer_scroll: u16 = 0;
-    let mut block_scroll: u16 = 0;
+    let mut selected_block: u8 = 0;
+    let mut show_block_modal = false;
+    let mut blocks_focused = true; // true = blocks table, false = peers table
     let mut screen = Screen::Dashboard;
     let mut selected_bit: u8 = 0;
     let mut show_bit_modal = false;
@@ -155,16 +162,13 @@ async fn main() -> anyhow::Result<()> {
 
     let mut event_stream = EventStream::new();
 
-    loop {
-        // Render
-        let draw_data = if screen == Screen::Signaling {
-            &signaling_data
-        } else {
-            &node_data
-        };
-        terminal.draw(|f| ui::draw(f, draw_data, peer_scroll, block_scroll, screen, selected_bit, show_bit_modal, rpc_spinner))?;
+    // Initial render
+    terminal.draw(|f| ui::draw(f, &node_data, peer_scroll, screen, selected_bit, show_bit_modal, rpc_spinner, &block_stats_cache, selected_block, show_block_modal, blocks_focused))?;
 
-        // Wait for: channel data or keyboard event
+    loop {
+        let mut redraw = false;
+
+        // Wait for: channel data, block stats, or keyboard event
         tokio::select! {
             Some(data) = rx.recv() => {
                 if !data.recent_block_versions.is_empty() {
@@ -172,14 +176,37 @@ async fn main() -> anyhow::Result<()> {
                 }
                 node_data = data;
                 rpc_spinner = rpc_spinner.wrapping_add(1);
+                redraw = true;
+            }
+            Some(stats) = stats_rx.recv() => {
+                for s in stats {
+                    block_stats_cache.insert(s.height, s);
+                }
+                rpc_spinner = rpc_spinner.wrapping_add(1);
+                redraw = true;
             }
             Some(Ok(event)) = event_stream.next() => {
                 if let Event::Key(key) = event {
                     if key.kind == KeyEventKind::Press {
+                        redraw = true;
                         if show_bit_modal {
                             match key.code {
                                 KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => {
                                     show_bit_modal = false;
+                                }
+                                _ => {}
+                            }
+                        } else if show_block_modal {
+                            match key.code {
+                                KeyCode::Esc | KeyCode::Char('q') => {
+                                    show_block_modal = false;
+                                }
+                                KeyCode::Down => {
+                                    let max = node_data.recent_blocks.len().saturating_sub(1) as u8;
+                                    selected_block = (selected_block + 1).min(max);
+                                }
+                                KeyCode::Up => {
+                                    selected_block = selected_block.saturating_sub(1);
                                 }
                                 _ => {}
                             }
@@ -198,23 +225,50 @@ async fn main() -> anyhow::Result<()> {
                                     }
                                     poll_notify.notify_one();
                                 }
-                                KeyCode::Down | KeyCode::Char('j') => {
+                                KeyCode::Down => {
                                     if screen == Screen::Signaling {
                                         selected_bit = (selected_bit + 1).min(28);
+                                    } else if screen == Screen::Dashboard {
+                                        if blocks_focused {
+                                            let max = node_data.recent_blocks.len().saturating_sub(1) as u8;
+                                            selected_block = (selected_block + 1).min(max);
+                                        } else {
+                                            peer_scroll = peer_scroll.saturating_add(1);
+                                        }
                                     } else {
                                         peer_scroll = peer_scroll.saturating_add(1);
                                     }
                                 }
-                                KeyCode::Up | KeyCode::Char('k') => {
+                                KeyCode::Up => {
                                     if screen == Screen::Signaling {
                                         selected_bit = selected_bit.saturating_sub(1);
+                                    } else if screen == Screen::Dashboard {
+                                        if blocks_focused {
+                                            selected_block = selected_block.saturating_sub(1);
+                                        } else {
+                                            peer_scroll = peer_scroll.saturating_sub(1);
+                                        }
                                     } else {
                                         peer_scroll = peer_scroll.saturating_sub(1);
+                                    }
+                                }
+                                KeyCode::Char('j') | KeyCode::Char('k') => {
+                                    if screen == Screen::Dashboard {
+                                        blocks_focused = !blocks_focused;
                                     }
                                 }
                                 KeyCode::Enter => {
                                     if screen == Screen::Signaling {
                                         show_bit_modal = true;
+                                    } else if screen == Screen::Dashboard {
+                                        let max = node_data.recent_blocks.len().saturating_sub(1) as u8;
+                                        if selected_block <= max {
+                                            if let Some(b) = node_data.recent_blocks.get(selected_block as usize) {
+                                                if block_stats_cache.contains_key(&b.height) {
+                                                    show_block_modal = true;
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                                 KeyCode::Char('r') => {
@@ -224,18 +278,42 @@ async fn main() -> anyhow::Result<()> {
                                         poll_notify.notify_one();
                                     }
                                 }
-                                KeyCode::Char('J') => {
-                                    block_scroll = block_scroll.saturating_add(1);
-                                }
-                                KeyCode::Char('K') => {
-                                    block_scroll = block_scroll.saturating_sub(1);
+                                KeyCode::Char('d') => {
+                                    if screen == Screen::Dashboard {
+                                        let blocks: Vec<(u64, String)> = node_data
+                                            .recent_blocks
+                                            .iter()
+                                            .filter(|b| b.height > 0 && !block_stats_cache.contains_key(&b.height))
+                                            .map(|b| (b.height, b.hash.clone()))
+                                            .collect();
+                                        if !blocks.is_empty() {
+                                            let c = stats_client.clone();
+                                            let tx = stats_tx.clone();
+                                            tokio::spawn(async move {
+                                                if let Ok(stats) = c.fetch_block_stats(&blocks).await {
+                                                    let _ = tx.send(stats).await;
+                                                }
+                                            });
+                                        }
+                                    }
                                 }
                                 _ => {}
                             }
                         }
                     }
+                } else if let Event::Resize(_, _) = event {
+                    redraw = true;
                 }
             }
+        }
+
+        if redraw {
+            let draw_data = if screen == Screen::Signaling {
+                &signaling_data
+            } else {
+                &node_data
+            };
+            terminal.draw(|f| ui::draw(f, draw_data, peer_scroll, screen, selected_bit, show_bit_modal, rpc_spinner, &block_stats_cache, selected_block, show_block_modal, blocks_focused))?;
         }
     }
 
