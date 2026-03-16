@@ -264,7 +264,11 @@ pub struct BlockStats {
     pub tx_count: usize,        // total transactions (incl coinbase)
     pub financial_count: usize, // financial transactions
     pub opreturn_count: usize,  // transactions with OP_RETURN outputs
-    pub inscription_count: usize, // transactions with large witness data
+    pub inscription_count: usize, // transactions with large witness data (ordinals envelope)
+    pub rune_count: usize,      // transactions with Runes protocol OP_RETURN (OP_13)
+    pub brc20_count: usize,     // inscription txs containing BRC-20 JSON
+    pub stamp_count: usize,     // transactions with bare multisig outputs (Stamps/SRC-20)
+    pub other_data_count: usize, // data txs not matching any known protocol
     pub oversized_opreturn_count: usize, // OP_RETURNs exceeding 83-byte limit
     pub max_opreturn_size: usize, // largest OP_RETURN scriptPubKey in bytes
 }
@@ -480,6 +484,9 @@ impl RpcClient {
             let mut tx_count = 0usize;
             let mut opreturn_count = 0usize;
             let mut inscription_count = 0usize;
+            let mut rune_count = 0usize;
+            let mut brc20_count = 0usize;
+            let mut stamp_count = 0usize;
             let mut oversized_opreturn_count = 0usize;
             let mut max_opreturn_size = 0usize;
             let mut data_tx_count = 0usize;
@@ -496,53 +503,82 @@ impl RpcClient {
                     }
 
                     let mut is_opreturn = false;
+                    let mut is_rune = false;
+                    let mut has_multisig = false;
                     if let Some(outs) = tx["vout"].as_array() {
                         for o in outs {
-                            if o["scriptPubKey"]["type"].as_str() == Some("nulldata") {
+                            let script_type = o["scriptPubKey"]["type"].as_str().unwrap_or("");
+                            if script_type == "nulldata" {
                                 is_opreturn = true;
-                                // scriptPubKey hex: 2 hex chars per byte
-                                let script_size = o["scriptPubKey"]["hex"]
+                                let script_hex = o["scriptPubKey"]["hex"]
                                     .as_str()
-                                    .map(|s| s.len() / 2)
-                                    .unwrap_or(0);
+                                    .unwrap_or("");
+                                let script_size = script_hex.len() / 2;
                                 if script_size > max_opreturn_size {
                                     max_opreturn_size = script_size;
                                 }
-                                // Core's old standard limit: 83 bytes (OP_RETURN + push + 80 bytes data)
                                 if script_size > 83 {
                                     oversized_opreturn_count += 1;
+                                }
+                                // Runes: OP_RETURN OP_13 → hex starts with "6a5d"
+                                if script_hex.starts_with("6a5d") {
+                                    is_rune = true;
+                                }
+                            }
+                            if script_type == "multisig" {
+                                has_multisig = true;
+                            }
+                        }
+                    }
+
+                    // Inscription detection: witness envelope with "ord" marker
+                    // Look for OP_FALSE OP_IF OP_PUSH3 "ord" → hex "0063036f7264"
+                    let mut is_inscription = false;
+                    let mut is_brc20 = false;
+                    if let Some(ins) = tx["vin"].as_array() {
+                        for input in ins {
+                            if let Some(witness) = input["txinwitness"].as_array() {
+                                for item in witness {
+                                    if let Some(hex) = item.as_str() {
+                                        // Ordinals envelope marker
+                                        if hex.contains("0063036f7264") {
+                                            is_inscription = true;
+                                            // BRC-20: inscription contains "brc-20" in content
+                                            // hex-encoded "brc-20" = "6272632d3230"
+                                            if hex.contains("6272632d3230") {
+                                                is_brc20 = true;
+                                            }
+                                        } else if hex.len() > 1040 {
+                                            // Fallback: large witness item without ord envelope
+                                            is_inscription = true;
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
 
-                    let is_inscription = tx["vin"]
-                        .as_array()
-                        .map(|ins| {
-                            ins.iter().any(|i| {
-                                i["txinwitness"]
-                                    .as_array()
-                                    .map(|w| w.iter().any(|item| {
-                                        item.as_str().map(|s| s.len() > 1040).unwrap_or(false)
-                                    }))
-                                    .unwrap_or(false)
-                            })
-                        })
-                        .unwrap_or(false);
+                    // Stamps: bare multisig outputs used for data embedding
+                    let is_stamp = has_multisig && !is_opreturn && !is_inscription;
 
-                    if is_opreturn {
-                        opreturn_count += 1;
-                    }
-                    if is_inscription {
-                        inscription_count += 1;
-                    }
-                    if is_opreturn || is_inscription {
+                    if is_opreturn { opreturn_count += 1; }
+                    if is_inscription { inscription_count += 1; }
+                    if is_rune { rune_count += 1; }
+                    if is_brc20 { brc20_count += 1; }
+                    if is_stamp { stamp_count += 1; }
+
+                    let is_data = is_opreturn || is_inscription || is_stamp;
+                    if is_data {
                         data_tx_count += 1;
                     }
                 }
             }
 
             let financial_count = tx_count.saturating_sub(1).saturating_sub(data_tx_count); // exclude coinbase
+            // Other = data txs not classified as runes, inscriptions, or stamps
+            let other_data_count = data_tx_count.saturating_sub(
+                rune_count + inscription_count + stamp_count
+            );
 
             all_stats.push(BlockStats {
                 height: *height,
@@ -552,6 +588,10 @@ impl RpcClient {
                 financial_count,
                 opreturn_count,
                 inscription_count,
+                rune_count,
+                brc20_count,
+                stamp_count,
+                other_data_count,
                 oversized_opreturn_count,
                 max_opreturn_size,
             });

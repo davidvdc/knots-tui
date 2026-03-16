@@ -1326,7 +1326,7 @@ fn draw_bit_modal(f: &mut Frame, area: Rect, selected_bit: u8, data: &NodeData) 
 
 fn draw_block_modal(f: &mut Frame, area: Rect, block: &BlockInfo, stats: &BlockStats) {
     let modal_width = (area.width as f32 * 0.65) as u16;
-    let modal_height = 24u16.min(area.height - 4);
+    let modal_height = 32u16.min(area.height - 4);
     let x = (area.width.saturating_sub(modal_width)) / 2;
     let y = (area.height.saturating_sub(modal_height)) / 2;
     let modal_area = Rect::new(x, y, modal_width, modal_height);
@@ -1336,14 +1336,23 @@ fn draw_block_modal(f: &mut Frame, area: Rect, block: &BlockInfo, stats: &BlockS
     f.render_widget(dim, area);
 
     let user_tx = stats.tx_count.saturating_sub(1); // exclude coinbase
-    let data_count = stats.opreturn_count + stats.inscription_count;
+    let data_count = user_tx.saturating_sub(stats.financial_count);
     let pct = |count: usize| -> f64 {
         if user_tx > 0 { (count as f64 / user_tx as f64) * 100.0 } else { 0.0 }
     };
     let fin_pct = pct(stats.financial_count);
-    let opreturn_pct = pct(stats.opreturn_count);
-    let inscription_pct = pct(stats.inscription_count);
     let data_pct = pct(data_count);
+    let rune_pct = pct(stats.rune_count);
+    let inscription_pct = pct(stats.inscription_count);
+    let brc20_pct = pct(stats.brc20_count);
+    let stamp_pct = pct(stats.stamp_count);
+    let other_pct = pct(stats.other_data_count);
+    // Non-BRC20 inscriptions (other ordinals)
+    let other_inscription_count = stats.inscription_count.saturating_sub(stats.brc20_count);
+    let other_inscription_pct = pct(other_inscription_count);
+    // Non-Rune OP_RETURNs
+    let plain_opreturn = stats.opreturn_count.saturating_sub(stats.rune_count);
+    let plain_opreturn_pct = pct(plain_opreturn);
 
     let text = vec![
         Line::from(vec![
@@ -1362,44 +1371,78 @@ fn draw_block_modal(f: &mut Frame, area: Rect, block: &BlockInfo, stats: &BlockS
         Line::from(""),
         Line::from(Span::styled("Transaction Breakdown", Style::default().fg(Color::Cyan).bold())),
         Line::from(vec![
-            Span::styled("  Financial:     ", Style::default().fg(Color::DarkGray)),
+            Span::styled("  Financial:       ", Style::default().fg(Color::DarkGray)),
             Span::styled(
                 format!("{} ({:.1}%)", stats.financial_count, fin_pct),
                 Style::default().fg(Color::Green).bold(),
             ),
         ]),
         Line::from(vec![
-            Span::styled("  Data/spam:     ", Style::default().fg(Color::DarkGray)),
+            Span::styled("  Data/spam:       ", Style::default().fg(Color::DarkGray)),
             Span::styled(
                 format!("{} ({:.1}%)", data_count, data_pct),
                 Style::default().fg(if data_pct > 10.0 { Color::Red } else { Color::Yellow }).bold(),
             ),
         ]),
+        Line::from(""),
+        Line::from(Span::styled("Protocol Breakdown", Style::default().fg(Color::Cyan).bold())),
         Line::from(vec![
-            Span::styled("    OP_RETURN:   ", Style::default().fg(Color::DarkGray)),
+            Span::styled("  Runes:           ", Style::default().fg(Color::DarkGray)),
             Span::styled(
-                format!("{} ({:.1}%)", stats.opreturn_count, opreturn_pct),
+                format!("{} ({:.1}%)", stats.rune_count, rune_pct),
                 Style::default().fg(Color::Yellow),
             ),
+            Span::styled("  OP_RETURN with OP_13 tag", Style::default().fg(Color::DarkGray)),
         ]),
         Line::from(vec![
-            Span::styled("    Inscriptions:", Style::default().fg(Color::DarkGray)),
+            Span::styled("  BRC-20:          ", Style::default().fg(Color::DarkGray)),
             Span::styled(
-                format!(" {} ({:.1}%)", stats.inscription_count, inscription_pct),
+                format!("{} ({:.1}%)", stats.brc20_count, brc20_pct),
                 Style::default().fg(Color::Magenta),
             ),
+            Span::styled("  inscription with \"brc-20\" payload", Style::default().fg(Color::DarkGray)),
+        ]),
+        Line::from(vec![
+            Span::styled("  Inscriptions:    ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!("{} ({:.1}%)", other_inscription_count, other_inscription_pct),
+                Style::default().fg(Color::Magenta),
+            ),
+            Span::styled("  ordinals envelope (excl. BRC-20)", Style::default().fg(Color::DarkGray)),
+        ]),
+        Line::from(vec![
+            Span::styled("  Stamps:          ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!("{} ({:.1}%)", stats.stamp_count, stamp_pct),
+                Style::default().fg(Color::Red),
+            ),
+            Span::styled("  bare multisig outputs", Style::default().fg(Color::DarkGray)),
+        ]),
+        Line::from(vec![
+            Span::styled("  OP_RETURN other: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!("{} ({:.1}%)", plain_opreturn, plain_opreturn_pct),
+                Style::default().fg(Color::Yellow),
+            ),
+            Span::styled("  non-Rune nulldata", Style::default().fg(Color::DarkGray)),
+        ]),
+        Line::from(vec![
+            Span::styled("  Other:           ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!("{} ({:.1}%)", stats.other_data_count, other_pct),
+                Style::default().fg(Color::DarkGray).bold(),
+            ),
+            Span::styled("  unclassified data tx", Style::default().fg(Color::DarkGray)),
         ]),
         Line::from(""),
         Line::from(Span::styled("OP_RETURN Size Analysis", Style::default().fg(Color::Cyan).bold())),
         Line::from(vec![
-            Span::styled("  Oversized (>83 bytes): ", Style::default().fg(Color::DarkGray)),
+            Span::styled("  Oversized (>83B):  ", Style::default().fg(Color::DarkGray)),
             Span::styled(
                 format!("{}", stats.oversized_opreturn_count),
                 Style::default().fg(if stats.oversized_opreturn_count > 0 { Color::Red } else { Color::Green }).bold(),
             ),
-        ]),
-        Line::from(vec![
-            Span::styled("  Largest OP_RETURN:     ", Style::default().fg(Color::DarkGray)),
+            Span::styled("  Largest: ", Style::default().fg(Color::DarkGray)),
             Span::styled(
                 if stats.max_opreturn_size > 0 {
                     format!("{} bytes", stats.max_opreturn_size)
@@ -1411,16 +1454,6 @@ fn draw_block_modal(f: &mut Frame, area: Rect, block: &BlockInfo, stats: &BlockS
         ]),
         Line::from(Span::styled(
             "  (Core pre-v29 / Knots limit: 83 bytes = OP_RETURN + 80 data)",
-            Style::default().fg(Color::DarkGray),
-        )),
-        Line::from(""),
-        Line::from(Span::styled("Classification:", Style::default().fg(Color::Cyan).bold())),
-        Line::from(Span::styled(
-            "  OP_RETURN = nulldata outputs (data embedding, tokens, anchors)",
-            Style::default().fg(Color::DarkGray),
-        )),
-        Line::from(Span::styled(
-            "  Inscriptions = witness items > 520 bytes (ordinals, BRC-20)",
             Style::default().fg(Color::DarkGray),
         )),
         Line::from(""),
