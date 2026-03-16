@@ -74,6 +74,7 @@ async fn main() -> anyhow::Result<()> {
 
     let signaling_progress = Arc::new(AtomicU16::new(0));
     let force_full_fetch = Arc::new(AtomicBool::new(false));
+    let spinner_notify = Arc::new(Notify::new());
 
     // Main poll loop: handles Dashboard and KnownPeers
     // Dashboard uses cheap quick-checks every `interval` seconds,
@@ -83,6 +84,7 @@ async fn main() -> anyhow::Result<()> {
     let poll_wake = poll_notify.clone();
     let poll_tx = tx.clone();
     let poll_force = force_full_fetch.clone();
+    let poll_spinner = spinner_notify.clone();
     let quick_interval = Duration::from_secs(args.interval);
     let full_interval = Duration::from_secs(60);
     tokio::spawn(async move {
@@ -123,6 +125,7 @@ async fn main() -> anyhow::Result<()> {
                         }
                         Some(r)
                     } else {
+                        poll_spinner.notify_one();
                         None
                     }
                 }
@@ -237,6 +240,10 @@ async fn main() -> anyhow::Result<()> {
                 }
                 last_tip_height = new_tip;
                 node_data = data;
+                rpc_spinner = rpc_spinner.wrapping_add(1);
+                redraw = true;
+            }
+            _ = spinner_notify.notified() => {
                 rpc_spinner = rpc_spinner.wrapping_add(1);
                 redraw = true;
             }
