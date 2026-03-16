@@ -489,14 +489,7 @@ fn draw_peers_table(f: &mut Frame, area: Rect, data: &NodeData, scroll: u16, foc
 }
 
 fn draw_blocks_table(f: &mut Frame, area: Rect, data: &NodeData, block_stats: &HashMap<u64, BlockStats>, selected_block: u8, focused: bool) {
-    let has_stats = data.recent_blocks.iter().any(|b| block_stats.contains_key(&b.height));
-
-    let header_cells = if has_stats {
-        vec![" ", "Height", "TXs", "Size", "Weight", "Age", "BIP110", "BTC Out", "Fees", "Fin%", ">83B"]
-    } else {
-        vec![" ", "Height", "TXs", "Size", "Weight", "Age", "BIP110"]
-    };
-    let header = Row::new(header_cells)
+    let header = Row::new(vec![" ", "Height", "TXs", "Size", "Weight", "Age", "BIP110", "BTC Out", "Fees", "Fin%", ">83B"])
         .style(Style::default().fg(Color::Cyan).bold())
         .bottom_margin(0);
 
@@ -518,83 +511,55 @@ fn draw_blocks_table(f: &mut Frame, area: Rect, data: &NodeData, block_stats: &H
                 "no"
             };
             let bip110_color = if bip110 == "yes" { Color::Green } else { Color::DarkGray };
-
             let marker = if focused && i == selected_block as usize { ">" } else { " " };
 
-            if has_stats {
-                let (btc_out, fees, financial, fin_color, oversized) = if let Some(s) = block_stats.get(&b.height) {
-                    let user_tx = s.tx_count.saturating_sub(1);
-                    let pct = if user_tx > 0 {
-                        (s.financial_count as f64 / user_tx as f64) * 100.0
-                    } else {
-                        100.0
-                    };
-                    let color = if pct >= 90.0 { Color::Green } else if pct >= 70.0 { Color::Yellow } else { Color::Red };
-                    let os = format!("{}", s.oversized_opreturn_count);
-                    (format_btc(s.total_out), format_btc_fees(s.total_fee), format!("{:.0}%", pct), color, os)
+            let (btc_out, fees, financial, fin_color, oversized, os_color) = if let Some(s) = block_stats.get(&b.height) {
+                let user_tx = s.tx_count.saturating_sub(1);
+                let pct = if user_tx > 0 {
+                    (s.financial_count as f64 / user_tx as f64) * 100.0
                 } else {
-                    ("-".to_string(), "-".to_string(), "-".to_string(), Color::DarkGray, "-".to_string())
+                    100.0
                 };
-                let os_color = if let Some(s) = block_stats.get(&b.height) {
-                    if s.oversized_opreturn_count > 0 { Color::Red } else { Color::Green }
-                } else {
-                    Color::DarkGray
-                };
-                Row::new(vec![
-                    Cell::from(Span::styled(marker, Style::default().fg(Color::Yellow))),
-                    Cell::from(format_number(b.height)),
-                    Cell::from(format_number(b.tx_count as u64)),
-                    Cell::from(format_bytes_short(b.size)),
-                    Cell::from(format!("{:.1} kvWU", b.weight as f64 / 1000.0)),
-                    Cell::from(age),
-                    Cell::from(Span::styled(bip110.to_string(), Style::default().fg(bip110_color))),
-                    Cell::from(btc_out),
-                    Cell::from(fees),
-                    Cell::from(Span::styled(financial, Style::default().fg(fin_color))),
-                    Cell::from(Span::styled(oversized, Style::default().fg(os_color))),
-                ])
+                let color = if pct >= 90.0 { Color::Green } else if pct >= 70.0 { Color::Yellow } else { Color::Red };
+                let osc = if s.oversized_opreturn_count > 0 { Color::Red } else { Color::Green };
+                (format_btc(s.total_out), format_btc_fees(s.total_fee), format!("{:.0}%", pct), color, format!("{}", s.oversized_opreturn_count), osc)
             } else {
-                Row::new(vec![
-                    Cell::from(Span::styled(marker, Style::default().fg(Color::Yellow))),
-                    Cell::from(format_number(b.height)),
-                    Cell::from(format_number(b.tx_count as u64)),
-                    Cell::from(format_bytes_short(b.size)),
-                    Cell::from(format!("{:.1} kvWU", b.weight as f64 / 1000.0)),
-                    Cell::from(age),
-                    Cell::from(Span::styled(bip110.to_string(), Style::default().fg(bip110_color))),
-                ])
-            }
+                ("-".to_string(), "-".to_string(), "-".to_string(), Color::DarkGray, "-".to_string(), Color::DarkGray)
+            };
+
+            Row::new(vec![
+                Cell::from(Span::styled(marker, Style::default().fg(Color::Yellow))),
+                Cell::from(format_number(b.height)),
+                Cell::from(format_number(b.tx_count as u64)),
+                Cell::from(format_bytes_short(b.size)),
+                Cell::from(format!("{:.1} kvWU", b.weight as f64 / 1000.0)),
+                Cell::from(age),
+                Cell::from(Span::styled(bip110.to_string(), Style::default().fg(bip110_color))),
+                Cell::from(btc_out),
+                Cell::from(fees),
+                Cell::from(Span::styled(financial, Style::default().fg(fin_color))),
+                Cell::from(Span::styled(oversized, Style::default().fg(os_color))),
+            ])
         })
         .collect();
 
-    let widths = if has_stats {
-        vec![
-            Constraint::Length(2),
-            Constraint::Length(10),
-            Constraint::Length(7),
-            Constraint::Length(10),
-            Constraint::Length(12),
-            Constraint::Length(12),
-            Constraint::Length(7),
-            Constraint::Length(12),
-            Constraint::Length(12),
-            Constraint::Length(5),
-            Constraint::Min(4),
-        ]
-    } else {
-        vec![
-            Constraint::Length(2),
-            Constraint::Length(10),
-            Constraint::Length(7),
-            Constraint::Length(10),
-            Constraint::Length(12),
-            Constraint::Length(12),
-            Constraint::Min(6),
-        ]
-    };
+    let widths = vec![
+        Constraint::Length(2),
+        Constraint::Length(10),
+        Constraint::Length(7),
+        Constraint::Length(10),
+        Constraint::Length(12),
+        Constraint::Length(12),
+        Constraint::Length(7),
+        Constraint::Length(12),
+        Constraint::Length(12),
+        Constraint::Length(5),
+        Constraint::Min(4),
+    ];
 
-    let title = if has_stats {
-        " Recent Blocks [Enter: detail] "
+    let has_any = data.recent_blocks.iter().any(|b| block_stats.contains_key(&b.height));
+    let title = if has_any {
+        " Recent Blocks [Enter: detail | d: load missing] "
     } else {
         " Recent Blocks [d: load details] "
     };

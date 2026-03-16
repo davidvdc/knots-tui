@@ -151,6 +151,7 @@ async fn main() -> anyhow::Result<()> {
     let mut node_data = NodeData::default();
     let mut signaling_data = NodeData::default();
     let mut block_stats_cache: HashMap<u64, BlockStats> = HashMap::new();
+    let mut last_tip_height: u64 = 0;
     let mut peer_scroll: u16 = 0;
     let mut selected_block: u8 = 0;
     let mut show_block_modal = false;
@@ -174,6 +175,26 @@ async fn main() -> anyhow::Result<()> {
                 if !data.recent_block_versions.is_empty() {
                     signaling_data = data.clone();
                 }
+                // Auto-fetch stats for newly mined blocks
+                let new_tip = data.recent_blocks.first().map(|b| b.height).unwrap_or(0);
+                if new_tip > last_tip_height && last_tip_height > 0 {
+                    let new_blocks: Vec<(u64, String)> = data
+                        .recent_blocks
+                        .iter()
+                        .filter(|b| b.height > last_tip_height && !block_stats_cache.contains_key(&b.height))
+                        .map(|b| (b.height, b.hash.clone()))
+                        .collect();
+                    if !new_blocks.is_empty() {
+                        let c = stats_client.clone();
+                        let tx = stats_tx.clone();
+                        tokio::spawn(async move {
+                            if let Ok(stats) = c.fetch_block_stats(&new_blocks).await {
+                                let _ = tx.send(stats).await;
+                            }
+                        });
+                    }
+                }
+                last_tip_height = new_tip;
                 node_data = data;
                 rpc_spinner = rpc_spinner.wrapping_add(1);
                 redraw = true;
