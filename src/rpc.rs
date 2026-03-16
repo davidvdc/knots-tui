@@ -365,6 +365,19 @@ impl RpcClient {
         Ok(results)
     }
 
+    /// Cheap check: returns (block_height, connection_count) with minimal RPC overhead
+    pub async fn fetch_tip_and_peers(&self) -> Result<(u64, u64), String> {
+        let results = self
+            .batch_call(&[
+                ("getblockcount", json!([])),
+                ("getconnectioncount", json!([])),
+            ])
+            .await?;
+        let height = results[0].as_u64().unwrap_or(0);
+        let conns = results[1].as_u64().unwrap_or(0);
+        Ok((height, conns))
+    }
+
     pub async fn fetch_dashboard(&self) -> Result<NodeData, String> {
         let now = chrono::Utc::now().timestamp() as u64;
 

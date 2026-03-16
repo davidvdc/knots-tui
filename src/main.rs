@@ -11,7 +11,7 @@ use futures::StreamExt;
 use ratatui::prelude::*;
 use std::collections::HashMap;
 use std::io::stdout;
-use std::sync::atomic::{AtomicU8, AtomicU16, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU16, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{mpsc, Notify};
@@ -73,18 +73,59 @@ async fn main() -> anyhow::Result<()> {
     let signaling_notify = Arc::new(Notify::new());
 
     let signaling_progress = Arc::new(AtomicU16::new(0));
+    let force_full_fetch = Arc::new(AtomicBool::new(false));
 
     // Main poll loop: handles Dashboard and KnownPeers
+    // Dashboard uses cheap quick-checks every `interval` seconds,
+    // full fetch only on changes or every 60s.
     let poll_client = client.clone();
     let poll_screen = current_screen.clone();
     let poll_wake = poll_notify.clone();
     let poll_tx = tx.clone();
-    let interval = Duration::from_secs(args.interval);
+    let poll_force = force_full_fetch.clone();
+    let quick_interval = Duration::from_secs(args.interval);
+    let full_interval = Duration::from_secs(60);
     tokio::spawn(async move {
+        let mut last_height: u64 = 0;
+        let mut last_conns: u64 = 0;
+        let mut last_full_fetch = tokio::time::Instant::now();
+        let mut force_full = true; // first iteration always does full fetch
         loop {
             let screen = Screen::from_u8(poll_screen.load(Ordering::Relaxed));
+            if poll_force.swap(false, Ordering::Relaxed) {
+                force_full = true;
+            }
             let result = match screen {
-                Screen::Dashboard => Some(poll_client.fetch_dashboard().await),
+                Screen::Dashboard => {
+                    let mut need_full = force_full;
+                    force_full = false;
+
+                    if !need_full {
+                        // Cheap check: did block height or peer count change?
+                        if let Ok((h, c)) = poll_client.fetch_tip_and_peers().await {
+                            if h != last_height || c != last_conns {
+                                need_full = true;
+                            }
+                        }
+                    }
+
+                    // Also do full fetch if 60s elapsed
+                    if !need_full && last_full_fetch.elapsed() >= full_interval {
+                        need_full = true;
+                    }
+
+                    if need_full {
+                        let r = poll_client.fetch_dashboard().await;
+                        if let Ok(ref data) = r {
+                            last_height = data.blockchain.blocks;
+                            last_conns = data.network.connections;
+                            last_full_fetch = tokio::time::Instant::now();
+                        }
+                        Some(r)
+                    } else {
+                        None
+                    }
+                }
                 Screen::KnownPeers => Some(poll_client.fetch_known_peers().await),
                 Screen::Signaling => None, // handled by signaling task
             };
@@ -105,7 +146,7 @@ async fn main() -> anyhow::Result<()> {
             }
             if screen == Screen::Dashboard {
                 tokio::select! {
-                    _ = tokio::time::sleep(interval) => {}
+                    _ = tokio::time::sleep(quick_interval) => {}
                     _ = poll_wake.notified() => {}
                 }
             } else {
@@ -295,7 +336,8 @@ async fn main() -> anyhow::Result<()> {
                                 KeyCode::Char('r') => {
                                     if screen == Screen::Signaling {
                                         signaling_notify.notify_one();
-                                    } else if screen == Screen::KnownPeers {
+                                    } else {
+                                        force_full_fetch.store(true, Ordering::Relaxed);
                                         poll_notify.notify_one();
                                     }
                                 }

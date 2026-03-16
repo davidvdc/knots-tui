@@ -27,7 +27,7 @@ A terminal dashboard for monitoring your Bitcoin Knots node in real time.
 
 ## Tabs
 
-### Dashboard (auto-refreshes every 5s)
+### Dashboard (quick-check every 5s, full refresh on changes or every 60s)
 
 - **Blockchain** — block height, headers, sync progress, difficulty, disk usage, pruning and IBD status
 - **Mempool** — transaction count, size, memory usage, total fees, min fee rates
@@ -50,7 +50,7 @@ A terminal dashboard for monitoring your Bitcoin Knots node in real time.
 - **Version Bit Signaling** — all 29 BIP9 version bits (0–28) from the last 2,016 blocks (~1 retarget period), with signal count and percentage. Known deployments (csv, segwit, taproot, reduced_data) labeled. BIP320 nonce rolling bits (13–28) shown in grey. Select a bit and press Enter for a detailed explanation modal.
 - **Softforks** — all known soft forks including buried deployments (bip34, bip66, bip65, csv, segwit, taproot) with activation heights, and any active BIP9 deployments with signaling progress
 
-Data fetched using batched RPC calls for efficiency. Event-driven rendering (zero CPU when idle).
+Data fetched using batched RPC calls for efficiency. Dashboard uses cheap quick-checks (`getblockcount` + `getconnectioncount`) every 5 seconds, only triggering a full RPC fetch when block height or peer count changes, or every 60 seconds. Event-driven rendering (zero CPU when idle).
 
 ## Block Detail Modal
 
@@ -100,4 +100,4 @@ Uses cookie-based authentication. Bitcoin Knots writes a `.cookie` file (format:
 | `↑` / `↓` | Navigate focused table / select bit | Dashboard, Known Peers, Signaling |
 | `Enter` | Open block detail / bit detail modal | Dashboard, Signaling |
 | `d` | Load block stats (BTC out, fees, financial %) | Dashboard |
-| `r` | Refresh data | Known Peers, Signaling |
+| `r` | Force full refresh | All |

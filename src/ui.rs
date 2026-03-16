@@ -1448,7 +1448,7 @@ fn draw_block_modal(f: &mut Frame, area: Rect, block: &BlockInfo, stats: &BlockS
 
 fn draw_footer(f: &mut Frame, area: Rect, screen: Screen, rpc_spinner: u8) {
     let hints = match screen {
-        Screen::Dashboard => " q: quit | Tab: switch screen | j/k: switch table | ↑/↓: navigate ",
+        Screen::Dashboard => " q: quit | Tab: switch screen | j/k: switch table | ↑/↓: navigate | r: refresh ",
         Screen::KnownPeers => " q: quit | Tab: signaling | ↑/↓: scroll services | r: refresh ",
         Screen::Signaling => " q: quit | Tab: dashboard | ↑/↓: select bit | Enter: details | r: refresh ",
     };
