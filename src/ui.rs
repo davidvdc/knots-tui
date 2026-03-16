@@ -1352,17 +1352,17 @@ fn draw_block_modal(f: &mut Frame, area: Rect, block: &BlockInfo, stats: &BlockS
         if count > 0 { Color::Yellow } else { Color::DarkGray }
     };
 
-    // Protocol rows: (label, count)
-    let protocols: Vec<(&str, usize)> = vec![
-        ("Runes",          stats.rune_count),
-        ("BRC-20",         stats.brc20_count),
-        ("Inscriptions",   stats.inscription_count),
-        ("OPNET",          stats.opnet_count),
-        ("Stamps",         stats.stamp_count),
-        ("Counterparty",   stats.counterparty_count),
-        ("Omni Layer",     stats.omni_count),
-        ("OP_RETURN other", stats.opreturn_other_count),
-        ("Other",          stats.other_data_count),
+    // Protocol rows: (label, count, description)
+    let protocols: Vec<(&str, usize, &str)> = vec![
+        ("Runes",          stats.rune_count,          "fungible tokens via OP_RETURN"),
+        ("BRC-20",         stats.brc20_count,         "token standard via ordinals"),
+        ("Inscriptions",   stats.inscription_count,   "ordinals data (images, text, etc.)"),
+        ("OPNET",          stats.opnet_count,          "smart contracts via tapscript"),
+        ("Stamps",         stats.stamp_count,          "SRC-20 tokens via bare multisig"),
+        ("Counterparty",   stats.counterparty_count,   "asset protocol (XCP)"),
+        ("Omni Layer",     stats.omni_count,           "token layer (ex-Mastercoin)"),
+        ("OP_RETURN other", stats.opreturn_other_count, "unclassified nulldata"),
+        ("Other",          stats.other_data_count,     "data tx, unknown protocol"),
     ];
 
     let mut text = vec![
@@ -1398,13 +1398,14 @@ fn draw_block_modal(f: &mut Frame, area: Rect, block: &BlockInfo, stats: &BlockS
         Line::from(""),
         Line::from(Span::styled("Protocol Breakdown", Style::default().fg(Color::Cyan).bold())),
     ];
-    for (label, count) in &protocols {
+    for (label, count, desc) in &protocols {
         text.push(Line::from(vec![
             Span::styled(format!("  {:17}", format!("{}:", label)), Style::default().fg(Color::DarkGray)),
             Span::styled(
-                format!("{} ({:.1}%)", count, pct(*count)),
+                format!("{:>4} ({:.1}%)", count, pct(*count)),
                 Style::default().fg(proto_color(*count)),
             ),
+            Span::styled(format!("  {}", desc), Style::default().fg(Color::DarkGray)),
         ]));
     }
     text.extend_from_slice(&[
