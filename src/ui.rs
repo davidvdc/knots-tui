@@ -3,7 +3,7 @@ use crate::Screen;
 use ratatui::{prelude::*, widgets::*};
 use std::collections::BTreeMap;
 
-pub fn draw(f: &mut Frame, data: &NodeData, peer_scroll: u16, block_scroll: u16, screen: Screen, selected_bit: u8, show_bit_modal: bool, rpc_active: bool) {
+pub fn draw(f: &mut Frame, data: &NodeData, peer_scroll: u16, block_scroll: u16, screen: Screen, selected_bit: u8, show_bit_modal: bool, rpc_spinner: u8) {
     let area = f.area();
 
     let outer = Layout::default()
@@ -21,7 +21,7 @@ pub fn draw(f: &mut Frame, data: &NodeData, peer_scroll: u16, block_scroll: u16,
         Screen::KnownPeers => draw_known_peers(f, outer[1], data, peer_scroll),
         Screen::Signaling => draw_signaling(f, outer[1], data, selected_bit),
     }
-    draw_footer(f, outer[2], screen, rpc_active);
+    draw_footer(f, outer[2], screen, rpc_spinner);
 
     if show_bit_modal && screen == Screen::Signaling {
         draw_bit_modal(f, area, selected_bit, data);
@@ -1281,18 +1281,19 @@ fn draw_bit_modal(f: &mut Frame, area: Rect, selected_bit: u8, data: &NodeData) 
     f.render_widget(paragraph, modal_area);
 }
 
-fn draw_footer(f: &mut Frame, area: Rect, screen: Screen, rpc_active: bool) {
+fn draw_footer(f: &mut Frame, area: Rect, screen: Screen, rpc_spinner: u8) {
     let hints = match screen {
         Screen::Dashboard => " q: quit | Tab: known peers | j/k: scroll peers | J/K: scroll blocks ",
         Screen::KnownPeers => " q: quit | Tab: signaling | ↑/↓: scroll services | r: refresh ",
         Screen::Signaling => " q: quit | Tab: dashboard | ↑/↓: select bit | Enter: details | r: refresh ",
     };
 
-    let rpc_color = if rpc_active { Color::Yellow } else { Color::DarkGray };
+    const SPINNER: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+    let spinner_char = SPINNER[rpc_spinner as usize % SPINNER.len()];
 
     let footer = Paragraph::new(Line::from(vec![
         Span::styled(hints, Style::default().fg(Color::DarkGray)),
-        Span::styled(" [RPC] ", Style::default().fg(rpc_color)),
+        Span::styled(format!(" {} ", spinner_char), Style::default().fg(Color::DarkGray)),
     ]))
     .alignment(Alignment::Center);
     f.render_widget(footer, area);

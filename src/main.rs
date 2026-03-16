@@ -3,15 +3,16 @@ mod ui;
 
 use clap::Parser;
 use crossterm::{
-    event::{self, Event, KeyCode, KeyEventKind},
+    event::{Event, EventStream, KeyCode, KeyEventKind},
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
     ExecutableCommand,
 };
+use futures::StreamExt;
 use ratatui::prelude::*;
 use std::io::stdout;
 use std::sync::atomic::{AtomicU8, AtomicU16, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::sync::{mpsc, Notify};
 
 use rpc::{NodeData, RpcClient};
@@ -145,92 +146,92 @@ async fn main() -> anyhow::Result<()> {
 
     let mut node_data = NodeData::default();
     let mut signaling_data = NodeData::default();
-    let mut last_render = Instant::now();
     let mut peer_scroll: u16 = 0;
     let mut block_scroll: u16 = 0;
     let mut screen = Screen::Dashboard;
     let mut selected_bit: u8 = 0;
     let mut show_bit_modal = false;
-    let mut rpc_active_until = Instant::now();
+    let mut rpc_spinner: u8 = 0;
+
+    let mut event_stream = EventStream::new();
 
     loop {
-        while let Ok(data) = rx.try_recv() {
-            if !data.recent_block_versions.is_empty() {
-                signaling_data = data.clone();
+        // Render
+        let draw_data = if screen == Screen::Signaling {
+            &signaling_data
+        } else {
+            &node_data
+        };
+        terminal.draw(|f| ui::draw(f, draw_data, peer_scroll, block_scroll, screen, selected_bit, show_bit_modal, rpc_spinner))?;
+
+        // Wait for: channel data or keyboard event
+        tokio::select! {
+            Some(data) = rx.recv() => {
+                if !data.recent_block_versions.is_empty() {
+                    signaling_data = data.clone();
+                }
+                node_data = data;
+                rpc_spinner = rpc_spinner.wrapping_add(1);
             }
-            node_data = data;
-            rpc_active_until = Instant::now() + Duration::from_millis(500);
-        }
-
-        if last_render.elapsed() >= Duration::from_millis(100) {
-            let rpc_active = Instant::now() < rpc_active_until || signaling_progress.load(Ordering::Relaxed) > 0 && signaling_progress.load(Ordering::Relaxed) < 2016;
-            let draw_data = if screen == Screen::Signaling {
-                &signaling_data
-            } else {
-                &node_data
-            };
-            terminal.draw(|f| ui::draw(f, draw_data, peer_scroll, block_scroll, screen, selected_bit, show_bit_modal, rpc_active))?;
-            last_render = Instant::now();
-        }
-
-        if event::poll(Duration::from_millis(50))? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind == KeyEventKind::Press {
-                    if show_bit_modal {
-                        match key.code {
-                            KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => {
-                                show_bit_modal = false;
-                            }
-                            _ => {}
-                        }
-                    } else {
-                        match key.code {
-                            KeyCode::Char('q') | KeyCode::Esc => break,
-                            KeyCode::Tab => {
-                                screen = match screen {
-                                    Screen::Dashboard => Screen::KnownPeers,
-                                    Screen::KnownPeers => Screen::Signaling,
-                                    Screen::Signaling => Screen::Dashboard,
-                                };
-                                current_screen.store(screen as u8, Ordering::Relaxed);
-                                if screen == Screen::Signaling {
-                                    signaling_notify.notify_one();
+            Some(Ok(event)) = event_stream.next() => {
+                if let Event::Key(key) = event {
+                    if key.kind == KeyEventKind::Press {
+                        if show_bit_modal {
+                            match key.code {
+                                KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => {
+                                    show_bit_modal = false;
                                 }
-                                poll_notify.notify_one();
+                                _ => {}
                             }
-                            KeyCode::Down | KeyCode::Char('j') => {
-                                if screen == Screen::Signaling {
-                                    selected_bit = (selected_bit + 1).min(28);
-                                } else {
-                                    peer_scroll = peer_scroll.saturating_add(1);
-                                }
-                            }
-                            KeyCode::Up | KeyCode::Char('k') => {
-                                if screen == Screen::Signaling {
-                                    selected_bit = selected_bit.saturating_sub(1);
-                                } else {
-                                    peer_scroll = peer_scroll.saturating_sub(1);
-                                }
-                            }
-                            KeyCode::Enter => {
-                                if screen == Screen::Signaling {
-                                    show_bit_modal = true;
-                                }
-                            }
-                            KeyCode::Char('r') => {
-                                if screen == Screen::Signaling {
-                                    signaling_notify.notify_one();
-                                } else if screen == Screen::KnownPeers {
+                        } else {
+                            match key.code {
+                                KeyCode::Char('q') | KeyCode::Esc => break,
+                                KeyCode::Tab => {
+                                    screen = match screen {
+                                        Screen::Dashboard => Screen::KnownPeers,
+                                        Screen::KnownPeers => Screen::Signaling,
+                                        Screen::Signaling => Screen::Dashboard,
+                                    };
+                                    current_screen.store(screen as u8, Ordering::Relaxed);
+                                    if screen == Screen::Signaling {
+                                        signaling_notify.notify_one();
+                                    }
                                     poll_notify.notify_one();
                                 }
+                                KeyCode::Down | KeyCode::Char('j') => {
+                                    if screen == Screen::Signaling {
+                                        selected_bit = (selected_bit + 1).min(28);
+                                    } else {
+                                        peer_scroll = peer_scroll.saturating_add(1);
+                                    }
+                                }
+                                KeyCode::Up | KeyCode::Char('k') => {
+                                    if screen == Screen::Signaling {
+                                        selected_bit = selected_bit.saturating_sub(1);
+                                    } else {
+                                        peer_scroll = peer_scroll.saturating_sub(1);
+                                    }
+                                }
+                                KeyCode::Enter => {
+                                    if screen == Screen::Signaling {
+                                        show_bit_modal = true;
+                                    }
+                                }
+                                KeyCode::Char('r') => {
+                                    if screen == Screen::Signaling {
+                                        signaling_notify.notify_one();
+                                    } else if screen == Screen::KnownPeers {
+                                        poll_notify.notify_one();
+                                    }
+                                }
+                                KeyCode::Char('J') => {
+                                    block_scroll = block_scroll.saturating_add(1);
+                                }
+                                KeyCode::Char('K') => {
+                                    block_scroll = block_scroll.saturating_sub(1);
+                                }
+                                _ => {}
                             }
-                            KeyCode::Char('J') => {
-                                block_scroll = block_scroll.saturating_add(1);
-                            }
-                            KeyCode::Char('K') => {
-                                block_scroll = block_scroll.saturating_sub(1);
-                            }
-                            _ => {}
                         }
                     }
                 }
@@ -238,10 +239,8 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    // Drain any remaining key events so they don't leak to the shell
-    while event::poll(Duration::from_millis(0))? {
-        let _ = event::read();
-    }
+    // Drop event stream before draining to release the internal reader
+    drop(event_stream);
     terminal.clear()?;
     disable_raw_mode()?;
     stdout().execute(LeaveAlternateScreen)?;
