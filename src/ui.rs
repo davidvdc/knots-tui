@@ -1607,12 +1607,8 @@ fn render_analytics_table(f: &mut Frame, area: Rect, stats: &[BlockStats]) {
     let pct = |n: u64, total: u64| -> String {
         if total > 0 { format!("{:.1}", n as f64 / total as f64 * 100.0) } else { "0.0".into() }
     };
-
-    let pc = |n: u64, total: u64| -> (String, Color) {
-        let s = pct(n, total);
-        let c = if n > 0 { Color::Yellow } else { Color::DarkGray };
-        (format!("{}%", s), c)
-    };
+    let sep = || Cell::from("|").style(Style::default().fg(Color::DarkGray));
+    let detail_color = Color::Magenta;
 
     // Build rows newest first
     let rows: Vec<Row> = daily.iter().rev().map(|(date, d)| {
@@ -1626,8 +1622,9 @@ fn render_analytics_table(f: &mut Frame, area: Rect, stats: &[BlockStats]) {
             Cell::from(format!("{}%", pct(d.financial_vsize, d.total_vsize))).style(Style::default().fg(Color::Green)),
             Cell::from(format!("{}%", pct(data_tx, d.txs))).style(Style::default().fg(if data_tx > 0 { Color::Yellow } else { Color::DarkGray })),
             Cell::from(format!("{}%", pct(data_vsize, d.total_vsize))).style(Style::default().fg(if data_vsize > 0 { Color::Yellow } else { Color::DarkGray })),
+            sep(),
         ];
-        // Per-protocol: count% then size%
+        // Per-protocol: count% of data, size% of data vsize
         let protos: Vec<(u64, u64)> = vec![
             (d.runes, d.rune_vsize),
             (d.inscriptions, d.inscription_vsize),
@@ -1637,35 +1634,38 @@ fn render_analytics_table(f: &mut Frame, area: Rect, stats: &[BlockStats]) {
             (d.opreturn_other, d.opreturn_other_vsize),
         ];
         for (count, vsize) in protos {
-            let (s, c) = pc(count, d.txs);
-            cells.push(Cell::from(s).style(Style::default().fg(c)));
-            let (s2, c2) = pc(vsize, d.total_vsize);
-            cells.push(Cell::from(s2).style(Style::default().fg(c2)));
+            let c = if count > 0 { detail_color } else { Color::DarkGray };
+            cells.push(Cell::from(format!("{}%", pct(count, data_tx))).style(Style::default().fg(c)));
+            let c2 = if vsize > 0 { detail_color } else { Color::DarkGray };
+            cells.push(Cell::from(format!("{}%", pct(vsize, data_vsize))).style(Style::default().fg(c2)));
         }
         Row::new(cells)
     }).collect();
 
+    let hdr = Style::default().fg(Color::Cyan).bold();
+    let hdr_detail = Style::default().fg(detail_color).bold();
     let header = Row::new(vec![
-        Cell::from("Date"),
-        Cell::from("Blks"),
-        Cell::from("TXs"),
-        Cell::from("Fin%"),
-        Cell::from("FinSz"),
-        Cell::from("Dat%"),
-        Cell::from("DatSz"),
-        Cell::from("Run%"),
-        Cell::from("RunSz"),
-        Cell::from("Ins%"),
-        Cell::from("InsSz"),
-        Cell::from("BRC%"),
-        Cell::from("BRCSz"),
-        Cell::from("OPN%"),
-        Cell::from("OPNSz"),
-        Cell::from("Stp%"),
-        Cell::from("StpSz"),
-        Cell::from("OPR%"),
-        Cell::from("OPRSz"),
-    ]).style(Style::default().fg(Color::Cyan).bold());
+        Cell::from("Date").style(hdr),
+        Cell::from("Blks").style(hdr),
+        Cell::from("TXs").style(hdr),
+        Cell::from("Fin%").style(hdr),
+        Cell::from("FinSz").style(hdr),
+        Cell::from("Dat%").style(hdr),
+        Cell::from("DatSz").style(hdr),
+        Cell::from("|").style(Style::default().fg(Color::DarkGray)),
+        Cell::from("Run%").style(hdr_detail),
+        Cell::from("RunSz").style(hdr_detail),
+        Cell::from("Ins%").style(hdr_detail),
+        Cell::from("InsSz").style(hdr_detail),
+        Cell::from("BRC%").style(hdr_detail),
+        Cell::from("BRCSz").style(hdr_detail),
+        Cell::from("OPN%").style(hdr_detail),
+        Cell::from("OPNSz").style(hdr_detail),
+        Cell::from("Stp%").style(hdr_detail),
+        Cell::from("StpSz").style(hdr_detail),
+        Cell::from("OPR%").style(hdr_detail),
+        Cell::from("OPRSz").style(hdr_detail),
+    ]);
 
     let widths = [
         Constraint::Length(10), // Date
@@ -1675,6 +1675,7 @@ fn render_analytics_table(f: &mut Frame, area: Rect, stats: &[BlockStats]) {
         Constraint::Length(5),  // FinSz
         Constraint::Length(5),  // Dat%
         Constraint::Length(5),  // DatSz
+        Constraint::Length(1),  // |
         Constraint::Length(5),  // Run%
         Constraint::Length(5),  // RunSz
         Constraint::Length(5),  // Ins%

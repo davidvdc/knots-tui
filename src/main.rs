@@ -50,6 +50,18 @@ fn load_stats_from_file() -> Vec<BlockStats> {
     stats
 }
 
+fn rewrite_stats_file(stats: &[BlockStats]) {
+    use std::io::Write;
+    let path = stats_file_path();
+    if let Ok(mut f) = std::fs::File::create(&path) {
+        for s in stats {
+            if let Ok(line) = serde_json::to_string(s) {
+                let _ = writeln!(f, "{}", line);
+            }
+        }
+    }
+}
+
 /// State for the analytics task
 #[derive(Clone, PartialEq)]
 pub enum AnalyticsState {
@@ -437,13 +449,17 @@ async fn main() -> anyhow::Result<()> {
                                         existing.sort_by_key(|s| s.height);
 
                                         // Split into complete (has vsize data) and incomplete
+                                        let had_incomplete = existing.iter().any(|s| s.total_vsize == 0);
                                         let complete_heights: std::collections::HashSet<u64> =
                                             existing.iter()
                                                 .filter(|s| s.total_vsize > 0)
                                                 .map(|s| s.height)
                                                 .collect();
-                                        // Keep only complete entries
+                                        // Keep only complete entries; rewrite file to purge stale data
                                         existing.retain(|s| s.total_vsize > 0);
+                                        if had_incomplete {
+                                            rewrite_stats_file(&existing);
+                                        }
 
                                         // Determine range: go back 30 days (~4320 blocks) from tip
                                         let tip = node_data.blockchain.blocks;
