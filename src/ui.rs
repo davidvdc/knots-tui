@@ -1618,8 +1618,8 @@ fn render_analytics_table(f: &mut Frame, area: Rect, stats: &[BlockStats], missi
         let data_vsize = d.total_vsize.saturating_sub(d.financial_vsize);
         let mut cells = vec![
             Cell::from(date.clone()).style(Style::default().fg(Color::White)),
-            Cell::from(format_compact(d.blocks)).style(Style::default().fg(Color::DarkGray)),
-            Cell::from(format_compact(d.txs)).style(Style::default().fg(Color::White)),
+            Cell::from(format!("{:>4}", format_compact(d.blocks))).style(Style::default().fg(Color::DarkGray)),
+            Cell::from(format!("{:>7}", format_compact(d.txs))).style(Style::default().fg(Color::White)),
             Cell::from(format!("{}%", pct(d.financial, d.txs))).style(Style::default().fg(Color::Green)),
             Cell::from(format!("{}%", pct(d.financial_vsize, d.total_vsize))).style(Style::default().fg(Color::Green)),
             Cell::from(format!("{}%", pct(data_tx, d.txs))).style(Style::default().fg(if data_tx > 0 { Color::Yellow } else { Color::DarkGray })),
@@ -1632,7 +1632,7 @@ fn render_analytics_table(f: &mut Frame, area: Rect, stats: &[BlockStats], missi
         ];
         for count in protos {
             let c = if count > 0 { detail_color } else { Color::DarkGray };
-            cells.push(Cell::from(format_compact(count)).style(Style::default().fg(c)));
+            cells.push(Cell::from(format!("{:>6}", format_compact(count))).style(Style::default().fg(c)));
             cells.push(Cell::from(format!("{}%", pct(count, data_tx))).style(Style::default().fg(c)));
         }
         Row::new(cells)
