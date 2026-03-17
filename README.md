@@ -50,6 +50,17 @@ A terminal dashboard for monitoring your Bitcoin Knots node in real time.
 - **Version Bit Signaling** — all 29 BIP9 version bits (0–28) from the last 2,016 blocks (~1 retarget period), with signal count and percentage. Known deployments (csv, segwit, taproot, reduced_data) labeled. BIP320 nonce rolling bits (13–28) shown in grey. Select a bit and press Enter for a detailed explanation modal.
 - **Softforks** — all known soft forks including buried deployments (bip34, bip66, bip65, csv, segwit, taproot) with activation heights, and any active BIP9 deployments with signaling progress
 
+### Analytics (press `s` to start, `Esc` to stop)
+
+- **Daily Breakdown** — table with daily aggregated transaction analysis over ~30 days (~4320 blocks)
+  - Per day: block count, transaction count, financial %, financial size %, data/spam %, data size %
+  - Per-protocol detail (% of data): Runes, Inscriptions, BRC-20, OPNET, Stamps, OP_RETURN other
+  - Fetches recent-to-old (pruned node friendly)
+  - Existing data loaded automatically on tab entry from `~/.knots-tui/blockstats.jsonl`
+  - Missing blocks detected and shown in title — press `s` to fill gaps
+  - Newly mined blocks automatically added to history
+  - `Esc` stops a running analysis early (partial results shown)
+
 Data fetched using batched RPC calls for efficiency. Dashboard uses cheap quick-checks (`getblockcount` + `getconnectioncount`) every 5 seconds, only triggering a full RPC fetch when block height or peer count changes, or every 60 seconds. Event-driven rendering (zero CPU when idle).
 
 ## Block Detail Modal
@@ -103,10 +114,11 @@ Uses cookie-based authentication. Bitcoin Knots writes a `.cookie` file (format:
 
 | Key | Action | Screen |
 |---|---|---|
-| `q` / `Esc` | Quit (or close modal) | All |
+| `q` / `Esc` | Quit (or close modal / stop analysis) | All |
 | `Tab` | Switch between screens | All |
 | `j` / `k` | Switch focus between blocks and peers tables | Dashboard |
 | `↑` / `↓` | Navigate focused table / select bit | Dashboard, Known Peers, Signaling |
 | `Enter` | Open block detail / bit detail modal | Dashboard, Signaling |
 | `d` | Load block stats (BTC out, fees, financial %) | Dashboard |
-| `r` | Force full refresh | All |
+| `s` | Start / resume block analysis | Analytics |
+| `r` | Force full refresh | Dashboard, Known Peers, Signaling |
