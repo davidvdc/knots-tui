@@ -321,7 +321,13 @@ async fn main() -> anyhow::Result<()> {
             Some(stats) = stats_rx.recv() => {
                 append_stats_to_file(&stats);
                 for s in stats {
-                    block_stats_cache.insert(s.height, s);
+                    block_stats_cache.insert(s.height, s.clone());
+                    // Add to analytics history if loaded
+                    if analytics.state == AnalyticsState::Done {
+                        if !analytics.stats.iter().any(|e| e.height == s.height) {
+                            analytics.stats.push(s);
+                        }
+                    }
                 }
                 rpc_spinner = rpc_spinner.wrapping_add(1);
                 redraw = true;
@@ -384,7 +390,18 @@ async fn main() -> anyhow::Result<()> {
                                     if screen == Screen::Signaling {
                                         signaling_notify.notify_one();
                                     }
-                                    if screen != Screen::Analytics {
+                                    if screen == Screen::Analytics {
+                                        // Load jsonl on tab entry so table shows existing data
+                                        if analytics.state == AnalyticsState::Idle {
+                                            let mut loaded = load_stats_from_file();
+                                            loaded.retain(|s| s.total_vsize > 0);
+                                            if !loaded.is_empty() {
+                                                loaded.sort_by_key(|s| s.height);
+                                                analytics.stats = loaded;
+                                                analytics.state = AnalyticsState::Done;
+                                            }
+                                        }
+                                    } else {
                                         poll_notify.notify_one();
                                     }
                                 }

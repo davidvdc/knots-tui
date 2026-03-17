@@ -1608,7 +1608,7 @@ fn render_analytics_table(f: &mut Frame, area: Rect, stats: &[BlockStats]) {
         if total > 0 { format!("{:.1}", n as f64 / total as f64 * 100.0) } else { "0.0".into() }
     };
     let sep = || Cell::from("|").style(Style::default().fg(Color::DarkGray));
-    let detail_color = Color::Magenta;
+    let detail_color = Color::LightMagenta;
 
     // Build rows newest first
     let rows: Vec<Row> = daily.iter().rev().map(|(date, d)| {
@@ -1624,20 +1624,14 @@ fn render_analytics_table(f: &mut Frame, area: Rect, stats: &[BlockStats]) {
             Cell::from(format!("{}%", pct(data_vsize, d.total_vsize))).style(Style::default().fg(if data_vsize > 0 { Color::Yellow } else { Color::DarkGray })),
             sep(),
         ];
-        // Per-protocol: count% of data, size% of data vsize
-        let protos: Vec<(u64, u64)> = vec![
-            (d.runes, d.rune_vsize),
-            (d.inscriptions, d.inscription_vsize),
-            (d.brc20, d.brc20_vsize),
-            (d.opnet, d.opnet_vsize),
-            (d.stamps, d.stamp_vsize),
-            (d.opreturn_other, d.opreturn_other_vsize),
+        // Per-protocol: tx count + % of data
+        let protos: Vec<u64> = vec![
+            d.runes, d.inscriptions, d.brc20, d.opnet, d.stamps, d.opreturn_other,
         ];
-        for (count, vsize) in protos {
+        for count in protos {
             let c = if count > 0 { detail_color } else { Color::DarkGray };
+            cells.push(Cell::from(format!("{}", count)).style(Style::default().fg(c)));
             cells.push(Cell::from(format!("{}%", pct(count, data_tx))).style(Style::default().fg(c)));
-            let c2 = if vsize > 0 { detail_color } else { Color::DarkGray };
-            cells.push(Cell::from(format!("{}%", pct(vsize, data_vsize))).style(Style::default().fg(c2)));
         }
         Row::new(cells)
     }).collect();
@@ -1653,18 +1647,18 @@ fn render_analytics_table(f: &mut Frame, area: Rect, stats: &[BlockStats]) {
         Cell::from("Dat%").style(hdr),
         Cell::from("DatSz").style(hdr),
         Cell::from("|").style(Style::default().fg(Color::DarkGray)),
-        Cell::from("Run%").style(hdr_detail),
-        Cell::from("RunSz").style(hdr_detail),
-        Cell::from("Ins%").style(hdr_detail),
-        Cell::from("InsSz").style(hdr_detail),
-        Cell::from("BRC%").style(hdr_detail),
-        Cell::from("BRCSz").style(hdr_detail),
-        Cell::from("OPN%").style(hdr_detail),
-        Cell::from("OPNSz").style(hdr_detail),
-        Cell::from("Stp%").style(hdr_detail),
-        Cell::from("StpSz").style(hdr_detail),
-        Cell::from("OPR%").style(hdr_detail),
-        Cell::from("OPRSz").style(hdr_detail),
+        Cell::from("Rune").style(hdr_detail),
+        Cell::from("%").style(hdr_detail),
+        Cell::from("Insc").style(hdr_detail),
+        Cell::from("%").style(hdr_detail),
+        Cell::from("BRC").style(hdr_detail),
+        Cell::from("%").style(hdr_detail),
+        Cell::from("OPN").style(hdr_detail),
+        Cell::from("%").style(hdr_detail),
+        Cell::from("Stp").style(hdr_detail),
+        Cell::from("%").style(hdr_detail),
+        Cell::from("OPR").style(hdr_detail),
+        Cell::from("%").style(hdr_detail),
     ]);
 
     let widths = [
@@ -1676,18 +1670,18 @@ fn render_analytics_table(f: &mut Frame, area: Rect, stats: &[BlockStats]) {
         Constraint::Length(5),  // Dat%
         Constraint::Length(5),  // DatSz
         Constraint::Length(1),  // |
-        Constraint::Length(5),  // Run%
-        Constraint::Length(5),  // RunSz
-        Constraint::Length(5),  // Ins%
-        Constraint::Length(5),  // InsSz
-        Constraint::Length(5),  // BRC%
-        Constraint::Length(5),  // BRCSz
-        Constraint::Length(5),  // OPN%
-        Constraint::Length(5),  // OPNSz
-        Constraint::Length(5),  // Stp%
-        Constraint::Length(5),  // StpSz
-        Constraint::Length(5),  // OPR%
-        Constraint::Length(5),  // OPRSz
+        Constraint::Length(6),  // Rune count
+        Constraint::Length(5),  // Rune %
+        Constraint::Length(6),  // Insc count
+        Constraint::Length(5),  // Insc %
+        Constraint::Length(6),  // BRC count
+        Constraint::Length(5),  // BRC %
+        Constraint::Length(6),  // OPN count
+        Constraint::Length(5),  // OPN %
+        Constraint::Length(6),  // Stp count
+        Constraint::Length(5),  // Stp %
+        Constraint::Length(6),  // OPR count
+        Constraint::Length(5),  // OPR %
     ];
 
     let block_count = stats.len();
