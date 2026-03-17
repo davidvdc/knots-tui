@@ -1474,12 +1474,14 @@ fn draw_analytics(f: &mut Frame, area: Rect, analytics: &AnalyticsData) {
                 .border_type(BorderType::Rounded)
                 .title(" Analytics ")
                 .style(Style::default().fg(Color::Cyan));
+            let msg = if analytics.missing_blocks > 0 {
+                format!("Press 's' to analyze {} missing blocks (~30 day window)", analytics.missing_blocks)
+            } else {
+                "Press 's' to start analysis (~30 days, ~4320 blocks)".to_string()
+            };
             let text = Paragraph::new(vec![
                 Line::from(""),
-                Line::from(Span::styled(
-                    "Press 's' to start analysis (~30 days, ~4320 blocks)",
-                    Style::default().fg(Color::White),
-                )),
+                Line::from(Span::styled(msg, Style::default().fg(Color::White))),
                 Line::from(""),
                 Line::from(Span::styled(
                     "Daily breakdown of transaction types by count and block size.",
@@ -1521,7 +1523,7 @@ fn draw_analytics(f: &mut Frame, area: Rect, analytics: &AnalyticsData) {
             f.render_widget(gauge, rows[0]);
 
             if !analytics.stats.is_empty() {
-                render_analytics_table(f, rows[1], &analytics.stats);
+                render_analytics_table(f, rows[1], &analytics.stats, analytics.missing_blocks);
             }
         }
         AnalyticsState::Done => {
@@ -1536,7 +1538,7 @@ fn draw_analytics(f: &mut Frame, area: Rect, analytics: &AnalyticsData) {
                     .alignment(Alignment::Center);
                 f.render_widget(text, area);
             } else {
-                render_analytics_table(f, area, &analytics.stats);
+                render_analytics_table(f, area, &analytics.stats, analytics.missing_blocks);
             }
         }
     }
@@ -1566,7 +1568,7 @@ struct DayAgg {
     opreturn_other_vsize: u64,
 }
 
-fn render_analytics_table(f: &mut Frame, area: Rect, stats: &[BlockStats]) {
+fn render_analytics_table(f: &mut Frame, area: Rect, stats: &[BlockStats], missing: u64) {
     // Aggregate by day
     let mut daily: BTreeMap<String, DayAgg> = BTreeMap::new();
     for s in stats {
@@ -1616,8 +1618,8 @@ fn render_analytics_table(f: &mut Frame, area: Rect, stats: &[BlockStats]) {
         let data_vsize = d.total_vsize.saturating_sub(d.financial_vsize);
         let mut cells = vec![
             Cell::from(date.clone()).style(Style::default().fg(Color::White)),
-            Cell::from(format!("{}", d.blocks)).style(Style::default().fg(Color::DarkGray)),
-            Cell::from(format_number(d.txs)).style(Style::default().fg(Color::White)),
+            Cell::from(format_compact(d.blocks)).style(Style::default().fg(Color::DarkGray)),
+            Cell::from(format_compact(d.txs)).style(Style::default().fg(Color::White)),
             Cell::from(format!("{}%", pct(d.financial, d.txs))).style(Style::default().fg(Color::Green)),
             Cell::from(format!("{}%", pct(d.financial_vsize, d.total_vsize))).style(Style::default().fg(Color::Green)),
             Cell::from(format!("{}%", pct(data_tx, d.txs))).style(Style::default().fg(if data_tx > 0 { Color::Yellow } else { Color::DarkGray })),
@@ -1630,7 +1632,7 @@ fn render_analytics_table(f: &mut Frame, area: Rect, stats: &[BlockStats]) {
         ];
         for count in protos {
             let c = if count > 0 { detail_color } else { Color::DarkGray };
-            cells.push(Cell::from(format!("{}", count)).style(Style::default().fg(c)));
+            cells.push(Cell::from(format_compact(count)).style(Style::default().fg(c)));
             cells.push(Cell::from(format!("{}%", pct(count, data_tx))).style(Style::default().fg(c)));
         }
         Row::new(cells)
@@ -1691,12 +1693,30 @@ fn render_analytics_table(f: &mut Frame, area: Rect, stats: &[BlockStats]) {
             Block::default()
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
-                .title(format!(" Daily Breakdown — {} blocks ", block_count))
+                .title(if missing > 0 {
+                    format!(" Daily Breakdown — {} blocks ({} missing, press s) ", block_count, missing)
+                } else {
+                    format!(" Daily Breakdown — {} blocks ", block_count)
+                })
                 .style(Style::default().fg(Color::Cyan)),
         )
         .row_highlight_style(Style::default());
 
     f.render_widget(table, area);
+}
+
+fn format_compact(n: u64) -> String {
+    if n < 1_000 {
+        format!("{}", n)
+    } else if n < 10_000 {
+        format!("{:.1}k", n as f64 / 1_000.0)
+    } else if n < 1_000_000 {
+        format!("{}k", n / 1_000)
+    } else if n < 10_000_000 {
+        format!("{:.1}m", n as f64 / 1_000_000.0)
+    } else {
+        format!("{}m", n / 1_000_000)
+    }
 }
 
 fn draw_footer(f: &mut Frame, area: Rect, screen: Screen, rpc_spinner: u8) {

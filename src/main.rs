@@ -75,6 +75,7 @@ pub struct AnalyticsData {
     pub stats: Vec<BlockStats>,       // all loaded stats, sorted by height
     pub progress_current: u64,        // blocks analyzed so far
     pub progress_total: u64,          // total blocks to analyze
+    pub missing_blocks: u64,          // gaps in the dataset
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -274,6 +275,7 @@ async fn main() -> anyhow::Result<()> {
         stats: Vec::new(),
         progress_current: 0,
         progress_total: 0,
+        missing_blocks: 0,
     };
 
     let mut event_stream = EventStream::new();
@@ -392,14 +394,25 @@ async fn main() -> anyhow::Result<()> {
                                     }
                                     if screen == Screen::Analytics {
                                         // Load jsonl on tab entry so table shows existing data
-                                        if analytics.state == AnalyticsState::Idle {
+                                        if analytics.state != AnalyticsState::Running {
                                             let mut loaded = load_stats_from_file();
                                             loaded.retain(|s| s.total_vsize > 0);
-                                            if !loaded.is_empty() {
-                                                loaded.sort_by_key(|s| s.height);
-                                                analytics.stats = loaded;
-                                                analytics.state = AnalyticsState::Done;
-                                            }
+                                            loaded.sort_by_key(|s| s.height);
+                                            // Count gaps
+                                            let tip = node_data.blockchain.blocks;
+                                            let start = tip.saturating_sub(4320);
+                                            let loaded_heights: std::collections::HashSet<u64> =
+                                                loaded.iter().map(|s| s.height).collect();
+                                            let gaps = (start..=tip).filter(|h| !loaded_heights.contains(h)).count() as u64;
+                                            analytics.missing_blocks = gaps;
+                                            analytics.stats = loaded;
+                                            analytics.state = if analytics.stats.is_empty() && gaps > 0 {
+                                                AnalyticsState::Idle
+                                            } else if !analytics.stats.is_empty() {
+                                                AnalyticsState::Done
+                                            } else {
+                                                AnalyticsState::Idle
+                                            };
                                         }
                                     } else {
                                         poll_notify.notify_one();
