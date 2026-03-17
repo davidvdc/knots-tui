@@ -274,6 +274,18 @@ pub struct BlockStats {
     pub omni_count: usize,        // OP_RETURN with omni prefix
     pub opreturn_other_count: usize, // OP_RETURN not matching known protocols
     pub other_data_count: usize,  // unclassified data tx
+    // Per-protocol vsize (virtual bytes):
+    #[serde(default)] pub total_vsize: u64,
+    #[serde(default)] pub financial_vsize: u64,
+    #[serde(default)] pub rune_vsize: u64,
+    #[serde(default)] pub brc20_vsize: u64,
+    #[serde(default)] pub inscription_vsize: u64,
+    #[serde(default)] pub opnet_vsize: u64,
+    #[serde(default)] pub stamp_vsize: u64,
+    #[serde(default)] pub counterparty_vsize: u64,
+    #[serde(default)] pub omni_vsize: u64,
+    #[serde(default)] pub opreturn_other_vsize: u64,
+    #[serde(default)] pub other_data_vsize: u64,
     // Non-exclusive metrics:
     pub oversized_opreturn_count: usize, // OP_RETURNs exceeding 83-byte limit
     pub max_opreturn_size: usize,  // largest OP_RETURN scriptPubKey in bytes
@@ -502,6 +514,17 @@ impl RpcClient {
             let mut opreturn_other_count = 0usize;
             let mut other_data_count = 0usize;
             let mut financial_count = 0usize;
+            // Per-protocol vsize:
+            let mut total_vsize = 0u64;
+            let mut financial_vsize = 0u64;
+            let mut rune_vsize = 0u64;
+            let mut brc20_vsize = 0u64;
+            let mut inscription_vsize = 0u64;
+            let mut opnet_vsize = 0u64;
+            let mut stamp_vsize = 0u64;
+            let mut counterparty_vsize = 0u64;
+            let mut omni_vsize = 0u64;
+            let mut opreturn_other_vsize = 0u64;
             // Non-exclusive metrics:
             let mut oversized_opreturn_count = 0usize;
             let mut max_opreturn_size = 0usize;
@@ -515,6 +538,8 @@ impl RpcClient {
                         .as_array()
                         .map(|v| v.iter().any(|i| !i["coinbase"].is_null()))
                         .unwrap_or(false);
+                    let vsize = tx["vsize"].as_u64().unwrap_or(0);
+                    total_vsize += vsize;
                     if is_coinbase {
                         continue;
                     }
@@ -604,23 +629,23 @@ impl RpcClient {
 
                     // --- Classify into exactly one bucket (priority order) ---
                     if has_brc20 {
-                        brc20_count += 1;
+                        brc20_count += 1; brc20_vsize += vsize;
                     } else if has_inscription {
-                        inscription_count += 1;
+                        inscription_count += 1; inscription_vsize += vsize;
                     } else if has_opnet {
-                        opnet_count += 1;
+                        opnet_count += 1; opnet_vsize += vsize;
                     } else if has_rune {
-                        rune_count += 1;
+                        rune_count += 1; rune_vsize += vsize;
                     } else if has_counterparty {
-                        counterparty_count += 1;
+                        counterparty_count += 1; counterparty_vsize += vsize;
                     } else if has_omni {
-                        omni_count += 1;
+                        omni_count += 1; omni_vsize += vsize;
                     } else if has_multisig && !has_opreturn {
-                        stamp_count += 1;
+                        stamp_count += 1; stamp_vsize += vsize;
                     } else if has_opreturn {
-                        opreturn_other_count += 1;
+                        opreturn_other_count += 1; opreturn_other_vsize += vsize;
                     } else {
-                        financial_count += 1;
+                        financial_count += 1; financial_vsize += vsize;
                         continue; // not a data tx
                     }
                 }
@@ -648,7 +673,18 @@ impl RpcClient {
                 counterparty_count,
                 omni_count,
                 opreturn_other_count,
-                other_data_count: 0, // no unclassified with exhaustive matching
+                other_data_count: 0,
+                total_vsize,
+                financial_vsize,
+                rune_vsize,
+                brc20_vsize,
+                inscription_vsize,
+                opnet_vsize,
+                stamp_vsize,
+                counterparty_vsize,
+                omni_vsize,
+                opreturn_other_vsize,
+                other_data_vsize: 0,
                 oversized_opreturn_count,
                 max_opreturn_size,
                 taproot_spend_count,

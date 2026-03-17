@@ -435,15 +435,22 @@ async fn main() -> anyhow::Result<()> {
                                         // Load existing data from jsonl
                                         let mut existing = load_stats_from_file();
                                         existing.sort_by_key(|s| s.height);
-                                        let existing_heights: std::collections::HashSet<u64> =
-                                            existing.iter().map(|s| s.height).collect();
+
+                                        // Split into complete (has vsize data) and incomplete
+                                        let complete_heights: std::collections::HashSet<u64> =
+                                            existing.iter()
+                                                .filter(|s| s.total_vsize > 0)
+                                                .map(|s| s.height)
+                                                .collect();
+                                        // Keep only complete entries
+                                        existing.retain(|s| s.total_vsize > 0);
 
                                         // Determine range: go back 30 days (~4320 blocks) from tip
                                         let tip = node_data.blockchain.blocks;
                                         let start = tip.saturating_sub(4320);
                                         let missing: Vec<u64> = (start..=tip)
                                             .rev()
-                                            .filter(|h| !existing_heights.contains(h))
+                                            .filter(|h| !complete_heights.contains(h))
                                             .collect();
 
                                         analytics.stats = existing;

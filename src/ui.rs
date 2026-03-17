@@ -1482,7 +1482,7 @@ fn draw_analytics(f: &mut Frame, area: Rect, analytics: &AnalyticsData) {
                 )),
                 Line::from(""),
                 Line::from(Span::styled(
-                    "Analyzes non-financial transaction ratio per day.",
+                    "Daily breakdown of transaction types by count and block size.",
                     Style::default().fg(Color::DarkGray),
                 )),
                 Line::from(Span::styled(
@@ -1495,136 +1495,213 @@ fn draw_analytics(f: &mut Frame, area: Rect, analytics: &AnalyticsData) {
             f.render_widget(text, area);
         }
         AnalyticsState::Running => {
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .border_type(BorderType::Rounded)
-                .title(" Analytics — Fetching ")
-                .style(Style::default().fg(Color::Yellow));
             let pct = if analytics.progress_total > 0 {
                 (analytics.progress_current as f64 / analytics.progress_total as f64 * 100.0) as u16
             } else {
                 0
             };
+            let rows = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Length(3), Constraint::Min(4)])
+                .split(area);
+
+            let gauge_block = Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .title(" Analytics — Fetching ")
+                .style(Style::default().fg(Color::Yellow));
             let gauge = Gauge::default()
-                .block(Block::default())
+                .block(gauge_block)
                 .gauge_style(Style::default().fg(Color::Yellow).bg(Color::DarkGray))
                 .percent(pct)
                 .label(format!(
                     "{} / {} blocks ({}%)",
                     analytics.progress_current, analytics.progress_total, pct
                 ));
-            let inner = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([
-                    Constraint::Min(1),
-                    Constraint::Length(1),
-                    Constraint::Min(1),
-                ])
-                .split(block.inner(area));
-            f.render_widget(block, area);
-            f.render_widget(gauge, inner[1]);
+            f.render_widget(gauge, rows[0]);
 
-            // Show partial chart if we have data
-            if analytics.stats.len() > 1 {
-                render_analytics_chart(f, inner[2], &analytics.stats);
+            if !analytics.stats.is_empty() {
+                render_analytics_table(f, rows[1], &analytics.stats);
             }
         }
         AnalyticsState::Done => {
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .border_type(BorderType::Rounded)
-                .title(format!(" Analytics — {} blocks ", analytics.stats.len()))
-                .style(Style::default().fg(Color::Green));
-
             if analytics.stats.is_empty() {
+                let block = Block::default()
+                    .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded)
+                    .title(" Analytics ")
+                    .style(Style::default().fg(Color::Green));
                 let text = Paragraph::new("No data available.")
                     .block(block)
                     .alignment(Alignment::Center);
                 f.render_widget(text, area);
             } else {
-                let inner = block.inner(area);
-                f.render_widget(block, area);
-                render_analytics_chart(f, inner, &analytics.stats);
+                render_analytics_table(f, area, &analytics.stats);
             }
         }
     }
 }
 
-fn render_analytics_chart(f: &mut Frame, area: Rect, stats: &[BlockStats]) {
-    // Aggregate by day: non-financial ratio per day
-    let mut daily: BTreeMap<String, (u64, u64)> = BTreeMap::new(); // date -> (non_financial, total)
+struct DayAgg {
+    blocks: u64,
+    txs: u64,
+    financial: u64,
+    runes: u64,
+    brc20: u64,
+    inscriptions: u64,
+    opnet: u64,
+    stamps: u64,
+    counterparty: u64,
+    omni: u64,
+    opreturn_other: u64,
+    total_vsize: u64,
+    financial_vsize: u64,
+    rune_vsize: u64,
+    brc20_vsize: u64,
+    inscription_vsize: u64,
+    opnet_vsize: u64,
+    stamp_vsize: u64,
+    counterparty_vsize: u64,
+    omni_vsize: u64,
+    opreturn_other_vsize: u64,
+}
+
+fn render_analytics_table(f: &mut Frame, area: Rect, stats: &[BlockStats]) {
+    // Aggregate by day
+    let mut daily: BTreeMap<String, DayAgg> = BTreeMap::new();
     for s in stats {
-        if s.tx_count == 0 {
-            continue;
-        }
         let date = chrono::DateTime::from_timestamp(s.time as i64, 0)
-            .map(|dt| dt.format("%m-%d").to_string())
+            .map(|dt| dt.format("%Y-%m-%d").to_string())
             .unwrap_or_default();
-        let entry = daily.entry(date).or_insert((0, 0));
-        let non_fin = s.tx_count.saturating_sub(s.financial_count);
-        entry.0 += non_fin as u64;
-        entry.1 += s.tx_count as u64;
+        let e = daily.entry(date).or_insert(DayAgg {
+            blocks: 0, txs: 0, financial: 0, runes: 0, brc20: 0, inscriptions: 0,
+            opnet: 0, stamps: 0, counterparty: 0, omni: 0, opreturn_other: 0,
+            total_vsize: 0, financial_vsize: 0, rune_vsize: 0, brc20_vsize: 0,
+            inscription_vsize: 0, opnet_vsize: 0, stamp_vsize: 0, counterparty_vsize: 0,
+            omni_vsize: 0, opreturn_other_vsize: 0,
+        });
+        e.blocks += 1;
+        let user_tx = s.tx_count.saturating_sub(1) as u64;
+        e.txs += user_tx;
+        e.financial += s.financial_count as u64;
+        e.runes += s.rune_count as u64;
+        e.brc20 += s.brc20_count as u64;
+        e.inscriptions += s.inscription_count as u64;
+        e.opnet += s.opnet_count as u64;
+        e.stamps += s.stamp_count as u64;
+        e.counterparty += s.counterparty_count as u64;
+        e.omni += s.omni_count as u64;
+        e.opreturn_other += s.opreturn_other_count as u64;
+        e.total_vsize += s.total_vsize;
+        e.financial_vsize += s.financial_vsize;
+        e.rune_vsize += s.rune_vsize;
+        e.brc20_vsize += s.brc20_vsize;
+        e.inscription_vsize += s.inscription_vsize;
+        e.opnet_vsize += s.opnet_vsize;
+        e.stamp_vsize += s.stamp_vsize;
+        e.counterparty_vsize += s.counterparty_vsize;
+        e.omni_vsize += s.omni_vsize;
+        e.opreturn_other_vsize += s.opreturn_other_vsize;
     }
 
-    if daily.is_empty() {
-        return;
-    }
+    let pct = |n: u64, total: u64| -> String {
+        if total > 0 { format!("{:.1}", n as f64 / total as f64 * 100.0) } else { "0.0".into() }
+    };
 
-    let labels: Vec<String> = daily.keys().cloned().collect();
-    let data_points: Vec<(f64, f64)> = daily
-        .values()
-        .enumerate()
-        .map(|(i, (non_fin, total))| {
-            let pct = if *total > 0 {
-                *non_fin as f64 / *total as f64 * 100.0
-            } else {
-                0.0
-            };
-            (i as f64, pct)
-        })
-        .collect();
+    let pc = |n: u64, total: u64| -> (String, Color) {
+        let s = pct(n, total);
+        let c = if n > 0 { Color::Yellow } else { Color::DarkGray };
+        (format!("{}%", s), c)
+    };
 
-    let max_y = data_points
-        .iter()
-        .map(|(_, y)| *y)
-        .fold(0.0_f64, f64::max)
-        .max(1.0);
-    let y_upper = (max_y * 1.1).min(100.0);
+    // Build rows newest first
+    let rows: Vec<Row> = daily.iter().rev().map(|(date, d)| {
+        let data_tx = d.txs.saturating_sub(d.financial);
+        let data_vsize = d.total_vsize.saturating_sub(d.financial_vsize);
+        let mut cells = vec![
+            Cell::from(date.clone()).style(Style::default().fg(Color::White)),
+            Cell::from(format!("{}", d.blocks)).style(Style::default().fg(Color::DarkGray)),
+            Cell::from(format_number(d.txs)).style(Style::default().fg(Color::White)),
+            Cell::from(format!("{}%", pct(d.financial, d.txs))).style(Style::default().fg(Color::Green)),
+            Cell::from(format!("{}%", pct(d.financial_vsize, d.total_vsize))).style(Style::default().fg(Color::Green)),
+            Cell::from(format!("{}%", pct(data_tx, d.txs))).style(Style::default().fg(if data_tx > 0 { Color::Yellow } else { Color::DarkGray })),
+            Cell::from(format!("{}%", pct(data_vsize, d.total_vsize))).style(Style::default().fg(if data_vsize > 0 { Color::Yellow } else { Color::DarkGray })),
+        ];
+        // Per-protocol: count% then size%
+        let protos: Vec<(u64, u64)> = vec![
+            (d.runes, d.rune_vsize),
+            (d.inscriptions, d.inscription_vsize),
+            (d.brc20, d.brc20_vsize),
+            (d.opnet, d.opnet_vsize),
+            (d.stamps, d.stamp_vsize),
+            (d.opreturn_other, d.opreturn_other_vsize),
+        ];
+        for (count, vsize) in protos {
+            let (s, c) = pc(count, d.txs);
+            cells.push(Cell::from(s).style(Style::default().fg(c)));
+            let (s2, c2) = pc(vsize, d.total_vsize);
+            cells.push(Cell::from(s2).style(Style::default().fg(c2)));
+        }
+        Row::new(cells)
+    }).collect();
 
-    let dataset = Dataset::default()
-        .name("Non-financial %")
-        .marker(ratatui::symbols::Marker::Braille)
-        .graph_type(GraphType::Line)
-        .style(Style::default().fg(Color::Yellow))
-        .data(&data_points);
+    let header = Row::new(vec![
+        Cell::from("Date"),
+        Cell::from("Blks"),
+        Cell::from("TXs"),
+        Cell::from("Fin%"),
+        Cell::from("FinSz"),
+        Cell::from("Dat%"),
+        Cell::from("DatSz"),
+        Cell::from("Run%"),
+        Cell::from("RunSz"),
+        Cell::from("Ins%"),
+        Cell::from("InsSz"),
+        Cell::from("BRC%"),
+        Cell::from("BRCSz"),
+        Cell::from("OPN%"),
+        Cell::from("OPNSz"),
+        Cell::from("Stp%"),
+        Cell::from("StpSz"),
+        Cell::from("OPR%"),
+        Cell::from("OPRSz"),
+    ]).style(Style::default().fg(Color::Cyan).bold());
 
-    // Show ~8 evenly spaced x-axis labels
-    let step = if labels.len() > 8 { labels.len() / 8 } else { 1 };
-    let x_labels: Vec<Span> = labels
-        .iter()
-        .enumerate()
-        .filter(|(i, _)| i % step == 0 || *i == labels.len() - 1)
-        .map(|(_, l)| Span::styled(l.clone(), Style::default().fg(Color::DarkGray)))
-        .collect();
+    let widths = [
+        Constraint::Length(10), // Date
+        Constraint::Length(4),  // Blks
+        Constraint::Length(7),  // TXs
+        Constraint::Length(5),  // Fin%
+        Constraint::Length(5),  // FinSz
+        Constraint::Length(5),  // Dat%
+        Constraint::Length(5),  // DatSz
+        Constraint::Length(5),  // Run%
+        Constraint::Length(5),  // RunSz
+        Constraint::Length(5),  // Ins%
+        Constraint::Length(5),  // InsSz
+        Constraint::Length(5),  // BRC%
+        Constraint::Length(5),  // BRCSz
+        Constraint::Length(5),  // OPN%
+        Constraint::Length(5),  // OPNSz
+        Constraint::Length(5),  // Stp%
+        Constraint::Length(5),  // StpSz
+        Constraint::Length(5),  // OPR%
+        Constraint::Length(5),  // OPRSz
+    ];
 
-    let chart = Chart::new(vec![dataset])
-        .block(Block::default().title(" Non-Financial TX % by Day ").borders(Borders::ALL).border_type(BorderType::Rounded).style(Style::default().fg(Color::Cyan)))
-        .x_axis(
-            Axis::default()
-                .labels(x_labels)
-                .bounds([0.0, (labels.len() - 1).max(1) as f64]),
+    let block_count = stats.len();
+    let table = Table::new(rows, widths)
+        .header(header)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .title(format!(" Daily Breakdown — {} blocks ", block_count))
+                .style(Style::default().fg(Color::Cyan)),
         )
-        .y_axis(
-            Axis::default()
-                .labels(vec![
-                    Span::styled("0%", Style::default().fg(Color::DarkGray)),
-                    Span::styled(format!("{:.0}%", y_upper / 2.0), Style::default().fg(Color::DarkGray)),
-                    Span::styled(format!("{:.0}%", y_upper), Style::default().fg(Color::DarkGray)),
-                ])
-                .bounds([0.0, y_upper]),
-        );
+        .row_highlight_style(Style::default());
 
-    f.render_widget(chart, area);
+    f.render_widget(table, area);
 }
 
 fn draw_footer(f: &mut Frame, area: Rect, screen: Screen, rpc_spinner: u8) {
