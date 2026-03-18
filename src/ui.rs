@@ -1521,7 +1521,7 @@ fn draw_analytics(f: &mut Frame, area: Rect, analytics: &AnalyticsData) {
             f.render_widget(gauge, rows[0]);
 
             if !analytics.stats.is_empty() {
-                render_analytics_table(f, rows[1], &analytics.stats, analytics.missing_blocks);
+                render_analytics_table(f, rows[1], &analytics.stats, analytics.missing_blocks, analytics.scroll);
             }
         }
         AnalyticsState::Done => {
@@ -1536,7 +1536,7 @@ fn draw_analytics(f: &mut Frame, area: Rect, analytics: &AnalyticsData) {
                     .alignment(Alignment::Center);
                 f.render_widget(text, area);
             } else {
-                render_analytics_table(f, area, &analytics.stats, analytics.missing_blocks);
+                render_analytics_table(f, area, &analytics.stats, analytics.missing_blocks, analytics.scroll);
             }
         }
     }
@@ -1567,7 +1567,7 @@ struct DayAgg {
     opreturn_other_vsize: u64,
 }
 
-fn render_analytics_table(f: &mut Frame, area: Rect, stats: &[BlockStats], missing: u64) {
+fn render_analytics_table(f: &mut Frame, area: Rect, stats: &[BlockStats], missing: u64, scroll: u16) {
     // Aggregate by day
     let mut daily: BTreeMap<String, DayAgg> = BTreeMap::new();
     for s in stats {
@@ -1695,6 +1695,7 @@ fn render_analytics_table(f: &mut Frame, area: Rect, stats: &[BlockStats], missi
         Constraint::Length(5),  // >83B
     ];
 
+    let row_count = rows.len();
     let block_count = stats.len();
     let table = Table::new(rows, widths)
         .header(header)
@@ -1711,7 +1712,8 @@ fn render_analytics_table(f: &mut Frame, area: Rect, stats: &[BlockStats], missi
         )
         .row_highlight_style(Style::default());
 
-    f.render_widget(table, area);
+    let mut state = TableState::default().with_offset(scroll as usize);
+    f.render_stateful_widget(table, area, &mut state);
 }
 
 fn format_compact(n: u64) -> String {
@@ -1733,7 +1735,7 @@ fn draw_footer(f: &mut Frame, area: Rect, screen: Screen, rpc_spinner: u8) {
         Screen::Dashboard => " q: quit | Tab: switch screen | j/k: switch table | ↑/↓: navigate | r: refresh ",
         Screen::KnownPeers => " q: quit | Tab: signaling | ↑/↓: scroll services | r: refresh ",
         Screen::Signaling => " q: quit | Tab: analytics | ↑/↓: select bit | Enter: details | r: refresh ",
-        Screen::Analytics => " q: quit | Tab: dashboard | Esc: stop analysis ",
+        Screen::Analytics => " q: quit | Tab: dashboard | ↑/↓: scroll | +: extend 30 days | Esc: stop ",
     };
 
     const SPINNER: &[&str] = &[".  ", ".. ", "...", " ..", "  .", "   "];

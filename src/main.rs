@@ -74,6 +74,8 @@ pub struct AnalyticsData {
     pub progress_current: u64,        // blocks analyzed so far
     pub progress_total: u64,          // total blocks to analyze
     pub missing_blocks: u64,          // gaps in the dataset
+    pub scroll: u16,                  // scroll offset for analytics table
+    pub depth: u64,                   // how many blocks back from tip (grows by 4320 on '+')
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -324,6 +326,8 @@ async fn main() -> anyhow::Result<()> {
         progress_current: 0,
         progress_total: 0,
         missing_blocks: 0,
+        scroll: 0,
+        depth: 4320,
     };
     let mut backfill_started = false;
 
@@ -364,7 +368,7 @@ async fn main() -> anyhow::Result<()> {
                         analytics.stats.sort_by_key(|s| s.height);
 
                         let cached: HashSet<u64> = block_stats_cache.keys().copied().collect();
-                        let start = new_tip.saturating_sub(4320);
+                        let start = new_tip.saturating_sub(analytics.depth);
                         let analytics_heights: Vec<u64> = (start..=new_tip).rev().collect();
                         let recent: Vec<(u64, String)> = data.recent_blocks
                             .iter()
@@ -499,6 +503,8 @@ async fn main() -> anyhow::Result<()> {
                                 KeyCode::Down => {
                                     if screen == Screen::Signaling {
                                         selected_bit = (selected_bit + 1).min(28);
+                                    } else if screen == Screen::Analytics {
+                                        analytics.scroll = analytics.scroll.saturating_add(1);
                                     } else if screen == Screen::Dashboard {
                                         if blocks_focused {
                                             let max = node_data.recent_blocks.len().saturating_sub(1) as u8;
@@ -513,6 +519,8 @@ async fn main() -> anyhow::Result<()> {
                                 KeyCode::Up => {
                                     if screen == Screen::Signaling {
                                         selected_bit = selected_bit.saturating_sub(1);
+                                    } else if screen == Screen::Analytics {
+                                        analytics.scroll = analytics.scroll.saturating_sub(1);
                                     } else if screen == Screen::Dashboard {
                                         if blocks_focused {
                                             selected_block = selected_block.saturating_sub(1);
@@ -548,6 +556,30 @@ async fn main() -> anyhow::Result<()> {
                                     } else if screen != Screen::Analytics {
                                         force_full_fetch.store(true, Ordering::Relaxed);
                                         poll_notify.notify_one();
+                                    }
+                                }
+                                KeyCode::Char('+') | KeyCode::Char('=') => {
+                                    if screen == Screen::Analytics && analytics.state != AnalyticsState::Running {
+                                        // Extend analytics by another 30 days (~4320 blocks)
+                                        let tip = node_data.blockchain.blocks;
+                                        let old_start = tip.saturating_sub(analytics.depth);
+                                        analytics.depth += 4320;
+                                        let new_start = tip.saturating_sub(analytics.depth);
+                                        let extend_heights: Vec<u64> = (new_start..old_start).rev().collect();
+                                        if !extend_heights.is_empty() {
+                                            let cached: HashSet<u64> = block_stats_cache.keys().copied().collect();
+                                            backfill_stop.store(false, Ordering::Relaxed);
+                                            let total = spawn_backfill(
+                                                &client, &stats_tx, &backfill_stop,
+                                                &[], extend_heights, &cached,
+                                            );
+                                            if total > 0 {
+                                                analytics.state = AnalyticsState::Running;
+                                                analytics.progress_current = 0;
+                                                analytics.progress_total = total;
+                                                analytics.missing_blocks += total;
+                                            }
+                                        }
                                     }
                                 }
                                 _ => {}
