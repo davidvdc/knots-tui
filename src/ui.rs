@@ -76,6 +76,105 @@ fn draw_header(f: &mut Frame, area: Rect, data: &NodeData, screen: Screen) {
     f.render_widget(header, area);
 }
 
+fn draw_ibd_screen(f: &mut Frame, area: Rect, data: &NodeData, peer_scroll: u16) {
+    let bc = &data.blockchain;
+    let net = &data.network;
+    let progress = (bc.verificationprogress * 100.0).min(100.0);
+
+    // Progress bar: 40 chars wide
+    let bar_width = 40usize;
+    let filled = ((bc.verificationprogress * bar_width as f64) as usize).min(bar_width);
+    let bar = format!("[{}{}]", "#".repeat(filled), " ".repeat(bar_width - filled));
+
+    // ETA
+    let remaining_blocks = bc.headers.saturating_sub(bc.blocks);
+    let eta = if data.ibd_blocks_per_sec > 0.1 {
+        let secs = (remaining_blocks as f64 / data.ibd_blocks_per_sec) as u64;
+        format!("~{}", format_duration(secs))
+    } else {
+        "-".to_string()
+    };
+
+    // Speed
+    let speed = if data.ibd_blocks_per_sec > 0.1 {
+        format!("{:.1} blk/s", data.ibd_blocks_per_sec)
+    } else {
+        "-".to_string()
+    };
+
+    // Download rate
+    let dl_rate = if data.ibd_recv_per_sec > 0 {
+        format!("{}/s", format_bytes(data.ibd_recv_per_sec))
+    } else {
+        "-".to_string()
+    };
+
+    let cyan = Style::default().fg(Color::Cyan);
+    let gray = Style::default().fg(Color::DarkGray);
+    let white = Style::default().fg(Color::White);
+    let yellow = Style::default().fg(Color::Yellow).bold();
+    let green = Style::default().fg(Color::Green);
+
+    let lines = vec![
+        Line::from(vec![
+            Span::styled("Progress: ", gray),
+            Span::styled(bar, yellow),
+            Span::styled(format!("  {:.2}%", progress), yellow),
+        ]),
+        Line::from(vec![
+            Span::styled("Synced:   ", gray),
+            Span::styled(format!("{} / {} blocks", format_number(bc.blocks), format_number(bc.headers)), white),
+        ]),
+        Line::from(vec![
+            Span::styled("Speed:    ", gray),
+            Span::styled(&speed, cyan),
+            Span::styled("   ETA: ", gray),
+            Span::styled(&eta, white),
+        ]),
+        Line::from(vec![
+            Span::styled("Peers:    ", gray),
+            Span::styled(
+                format!("{} (in: {} / out: {})", net.connections, net.connections_in, net.connections_out),
+                white,
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("Download: ", gray),
+            Span::styled(&dl_rate, green),
+            Span::styled("   total recv: ", gray),
+            Span::styled(format_bytes(data.net_totals.totalbytesrecv), white),
+        ]),
+        Line::from(vec![
+            Span::styled("Disk:     ", gray),
+            Span::styled(format_bytes(bc.size_on_disk), white),
+            Span::styled("   Difficulty: ", gray),
+            Span::styled(format!("{:.2e}", bc.difficulty), white),
+        ]),
+        Line::from(vec![
+            Span::styled("Version:  ", gray),
+            Span::styled(net.subversion.clone(), Style::default().fg(Color::DarkGray)),
+        ]),
+    ];
+
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(9), // IBD info box
+            Constraint::Min(8),    // peers table
+        ])
+        .split(area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .title(" Initial Block Download ")
+        .title_style(Style::default().fg(Color::Yellow).bold());
+    let paragraph = Paragraph::new(lines).block(block);
+    f.render_widget(paragraph, rows[0]);
+
+    draw_peers_table(f, rows[1], data, peer_scroll, false);
+}
+
 fn draw_body(f: &mut Frame, area: Rect, data: &NodeData, peer_scroll: u16, block_stats: &HashMap<u64, BlockStats>, selected_block: u8, blocks_focused: bool, analytics: &AnalyticsData) {
     if let Some(ref err) = data.error {
         let err_block = Block::default()
@@ -88,6 +187,11 @@ fn draw_body(f: &mut Frame, area: Rect, data: &NodeData, peer_scroll: u16, block
             .wrap(Wrap { trim: true })
             .style(Style::default().fg(Color::Red));
         f.render_widget(err_text, area);
+        return;
+    }
+
+    if data.blockchain.initialblockdownload {
+        draw_ibd_screen(f, area, data, peer_scroll);
         return;
     }
 

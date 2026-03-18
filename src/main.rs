@@ -330,6 +330,9 @@ async fn main() -> anyhow::Result<()> {
         depth: 4320,
     };
     let mut backfill_started = false;
+    let mut prev_ibd_height: u64 = 0;
+    let mut prev_ibd_bytes_recv: u64 = 0;
+    let mut prev_ibd_fetched_at: u64 = 0;
 
     let mut event_stream = EventStream::new();
 
@@ -341,7 +344,7 @@ async fn main() -> anyhow::Result<()> {
 
         // Wait for: channel data, block stats, or keyboard event
         tokio::select! {
-            Some(data) = rx.recv() => {
+            Some(mut data) = rx.recv() => {
                 if !data.recent_block_versions.is_empty() {
                     signaling_data = data.clone();
                 }
@@ -413,6 +416,15 @@ async fn main() -> anyhow::Result<()> {
                         }
                     }
                     last_tip_height = new_tip;
+                    // Compute IBD sync speed and download rate from consecutive fetches
+                    if prev_ibd_fetched_at > 0 && data.fetched_at > prev_ibd_fetched_at {
+                        let dt = (data.fetched_at - prev_ibd_fetched_at) as f64;
+                        data.ibd_blocks_per_sec = data.blockchain.blocks.saturating_sub(prev_ibd_height) as f64 / dt;
+                        data.ibd_recv_per_sec = (data.net_totals.totalbytesrecv.saturating_sub(prev_ibd_bytes_recv) as f64 / dt) as u64;
+                    }
+                    prev_ibd_height = data.blockchain.blocks;
+                    prev_ibd_bytes_recv = data.net_totals.totalbytesrecv;
+                    prev_ibd_fetched_at = data.fetched_at;
                     node_data = data;
                 } else if !data.known_addresses.is_empty() {
                     // KnownPeers fetch — merge without clobbering dashboard fields

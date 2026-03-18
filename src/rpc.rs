@@ -275,6 +275,8 @@ pub struct NodeData {
     pub softforks: BTreeMap<String, SoftFork>,
     pub block_stats: Vec<BlockStats>,
     pub recent_block_versions: Vec<(u64, i64)>, // (height, version)
+    pub ibd_blocks_per_sec: f64,  // sync speed (blocks/s), 0 until second fetch
+    pub ibd_recv_per_sec: u64,    // download rate (bytes/s), 0 until second fetch
 }
 
 #[derive(Default, Clone, Debug, Deserialize)]
