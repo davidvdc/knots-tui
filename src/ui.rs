@@ -1554,6 +1554,7 @@ struct DayAgg {
     counterparty: u64,
     omni: u64,
     opreturn_other: u64,
+    oversized_opreturn: u64,
     total_vsize: u64,
     financial_vsize: u64,
     rune_vsize: u64,
@@ -1576,6 +1577,7 @@ fn render_analytics_table(f: &mut Frame, area: Rect, stats: &[BlockStats], missi
         let e = daily.entry(date).or_insert(DayAgg {
             blocks: 0, txs: 0, financial: 0, runes: 0, brc20: 0, inscriptions: 0,
             opnet: 0, stamps: 0, counterparty: 0, omni: 0, opreturn_other: 0,
+            oversized_opreturn: 0,
             total_vsize: 0, financial_vsize: 0, rune_vsize: 0, brc20_vsize: 0,
             inscription_vsize: 0, opnet_vsize: 0, stamp_vsize: 0, counterparty_vsize: 0,
             omni_vsize: 0, opreturn_other_vsize: 0,
@@ -1592,6 +1594,7 @@ fn render_analytics_table(f: &mut Frame, area: Rect, stats: &[BlockStats], missi
         e.counterparty += s.counterparty_count as u64;
         e.omni += s.omni_count as u64;
         e.opreturn_other += s.opreturn_other_count as u64;
+        e.oversized_opreturn += s.oversized_opreturn_count as u64;
         e.total_vsize += s.total_vsize;
         e.financial_vsize += s.financial_vsize;
         e.rune_vsize += s.rune_vsize;
@@ -1633,6 +1636,10 @@ fn render_analytics_table(f: &mut Frame, area: Rect, stats: &[BlockStats], missi
             cells.push(Cell::from(format!("{:>6}", format_compact(count))).style(Style::default().fg(c)));
             cells.push(Cell::from(format!("{}%", pct(count, data_tx))).style(Style::default().fg(c)));
         }
+        // >83B column
+        let c83 = if d.oversized_opreturn > 0 { Color::Red } else { Color::DarkGray };
+        cells.push(sep());
+        cells.push(Cell::from(format!("{:>5}", format_compact(d.oversized_opreturn))).style(Style::default().fg(c83)));
         Row::new(cells)
     }).collect();
 
@@ -1659,6 +1666,8 @@ fn render_analytics_table(f: &mut Frame, area: Rect, stats: &[BlockStats], missi
         Cell::from("%").style(hdr_detail),
         Cell::from("OPR").style(hdr_detail),
         Cell::from("%").style(hdr_detail),
+        Cell::from("|").style(Style::default().fg(Color::DarkGray)),
+        Cell::from(">83B").style(Style::default().fg(Color::Red).bold()),
     ]);
 
     let widths = [
@@ -1682,6 +1691,8 @@ fn render_analytics_table(f: &mut Frame, area: Rect, stats: &[BlockStats], missi
         Constraint::Length(5),  // Stp %
         Constraint::Length(6),  // OPR count
         Constraint::Length(5),  // OPR %
+        Constraint::Length(1),  // |
+        Constraint::Length(5),  // >83B
     ];
 
     let block_count = stats.len();
@@ -1692,7 +1703,7 @@ fn render_analytics_table(f: &mut Frame, area: Rect, stats: &[BlockStats], missi
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
                 .title(if missing > 0 {
-                    format!(" Daily Breakdown — {} blocks ({} missing, press s) ", block_count, missing)
+                    format!(" Daily Breakdown — {} blocks ({} missing) ", block_count, missing)
                 } else {
                     format!(" Daily Breakdown — {} blocks ", block_count)
                 })
