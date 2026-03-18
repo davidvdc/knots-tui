@@ -6,6 +6,251 @@ use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Arc;
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum TxCategory {
+    Coinbase,
+    Financial,
+    Brc20,
+    Inscription,
+    Opnet,
+    Rune,
+    Counterparty,
+    Omni,
+    Stamp,
+    OpReturnOther,
+}
+
+#[derive(Debug, Clone)]
+pub struct TxClassification {
+    pub category: TxCategory,
+    pub vsize: u64,
+    pub has_taproot_spend: bool,
+    pub has_taproot_output: bool,
+    pub oversized_opreturn_count: usize,
+    pub max_opreturn_size: usize,
+}
+
+/// Classify a single transaction from its JSON representation (getblock verbosity 2)
+pub fn classify_tx(tx: &Value) -> TxClassification {
+    let is_coinbase = tx["vin"]
+        .as_array()
+        .map(|v| v.iter().any(|i| !i["coinbase"].is_null()))
+        .unwrap_or(false);
+    let vsize = tx["vsize"].as_u64().unwrap_or(0);
+
+    if is_coinbase {
+        return TxClassification {
+            category: TxCategory::Coinbase,
+            vsize,
+            has_taproot_spend: false,
+            has_taproot_output: false,
+            oversized_opreturn_count: 0,
+            max_opreturn_size: 0,
+        };
+    }
+
+    // --- Scan outputs ---
+    let mut has_opreturn = false;
+    let mut has_rune = false;
+    let mut has_counterparty = false;
+    let mut has_omni = false;
+    let mut has_multisig = false;
+    let mut has_taproot_output = false;
+    let mut oversized_opreturn_count = 0usize;
+    let mut max_opreturn_size = 0usize;
+    if let Some(outs) = tx["vout"].as_array() {
+        for o in outs {
+            let script_type = o["scriptPubKey"]["type"].as_str().unwrap_or("");
+            if script_type == "nulldata" {
+                has_opreturn = true;
+                let script_hex = o["scriptPubKey"]["hex"].as_str().unwrap_or("");
+                let script_size = script_hex.len() / 2;
+                if script_size > max_opreturn_size {
+                    max_opreturn_size = script_size;
+                }
+                if script_size > 83 {
+                    oversized_opreturn_count += 1;
+                }
+                if script_hex.starts_with("6a5d") {
+                    has_rune = true;
+                }
+                if script_hex.contains("434e545250525459") {
+                    has_counterparty = true;
+                }
+                if script_hex.contains("6f6d6e69") {
+                    has_omni = true;
+                }
+            }
+            if script_type == "multisig" {
+                has_multisig = true;
+            }
+            if script_type == "witness_v1_taproot" {
+                has_taproot_output = true;
+            }
+        }
+    }
+
+    // --- Scan inputs/witness ---
+    let mut has_inscription = false;
+    let mut has_brc20 = false;
+    let mut has_opnet = false;
+    let mut has_taproot_spend = false;
+    if let Some(ins) = tx["vin"].as_array() {
+        for input in ins {
+            if input["prevout"]["scriptPubKey"]["type"].as_str()
+                == Some("witness_v1_taproot")
+            {
+                has_taproot_spend = true;
+            }
+            if let Some(witness) = input["txinwitness"].as_array() {
+                if witness.len() == 5 {
+                    let ctrl = witness[4].as_str().unwrap_or("");
+                    let tapscript = witness[3].as_str().unwrap_or("");
+                    if ctrl.len() == 130 && tapscript.contains("026f70") {
+                        has_opnet = true;
+                    }
+                }
+                for item in witness {
+                    if let Some(hex) = item.as_str() {
+                        if hex.contains("0063036f7264") {
+                            has_inscription = true;
+                            if hex.contains("6272632d3230") {
+                                has_brc20 = true;
+                            }
+                        } else if hex.len() > 1040 {
+                            has_inscription = true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // --- Classify into exactly one bucket (priority order) ---
+    let category = if has_brc20 {
+        TxCategory::Brc20
+    } else if has_inscription {
+        TxCategory::Inscription
+    } else if has_opnet {
+        TxCategory::Opnet
+    } else if has_rune {
+        TxCategory::Rune
+    } else if has_counterparty {
+        TxCategory::Counterparty
+    } else if has_omni {
+        TxCategory::Omni
+    } else if has_multisig && !has_opreturn {
+        TxCategory::Stamp
+    } else if has_opreturn {
+        TxCategory::OpReturnOther
+    } else {
+        TxCategory::Financial
+    };
+
+    TxClassification {
+        category,
+        vsize,
+        has_taproot_spend,
+        has_taproot_output,
+        oversized_opreturn_count,
+        max_opreturn_size,
+    }
+}
+
+/// Classify all transactions in a block and produce BlockStats
+pub fn classify_block(txs: &[Value], total_out: u64, total_fee: u64, height: u64, block_time: u64) -> BlockStats {
+    let tx_count = txs.len();
+    let mut rune_count = 0usize;
+    let mut brc20_count = 0usize;
+    let mut inscription_count = 0usize;
+    let mut opnet_count = 0usize;
+    let mut stamp_count = 0usize;
+    let mut counterparty_count = 0usize;
+    let mut omni_count = 0usize;
+    let mut opreturn_other_count = 0usize;
+    let mut financial_count = 0usize;
+    let mut total_vsize = 0u64;
+    let mut financial_vsize = 0u64;
+    let mut rune_vsize = 0u64;
+    let mut brc20_vsize = 0u64;
+    let mut inscription_vsize = 0u64;
+    let mut opnet_vsize = 0u64;
+    let mut stamp_vsize = 0u64;
+    let mut counterparty_vsize = 0u64;
+    let mut omni_vsize = 0u64;
+    let mut opreturn_other_vsize = 0u64;
+    let mut oversized_opreturn_count = 0usize;
+    let mut max_opreturn_size = 0usize;
+    let mut taproot_spend_count = 0usize;
+    let mut taproot_output_count = 0usize;
+
+    for tx in txs {
+        let c = classify_tx(tx);
+        total_vsize += c.vsize;
+        if c.oversized_opreturn_count > 0 {
+            oversized_opreturn_count += c.oversized_opreturn_count;
+        }
+        if c.max_opreturn_size > max_opreturn_size {
+            max_opreturn_size = c.max_opreturn_size;
+        }
+
+        match c.category {
+            TxCategory::Coinbase => continue,
+            TxCategory::Brc20 => { brc20_count += 1; brc20_vsize += c.vsize; }
+            TxCategory::Inscription => { inscription_count += 1; inscription_vsize += c.vsize; }
+            TxCategory::Opnet => { opnet_count += 1; opnet_vsize += c.vsize; }
+            TxCategory::Rune => { rune_count += 1; rune_vsize += c.vsize; }
+            TxCategory::Counterparty => { counterparty_count += 1; counterparty_vsize += c.vsize; }
+            TxCategory::Omni => { omni_count += 1; omni_vsize += c.vsize; }
+            TxCategory::Stamp => { stamp_count += 1; stamp_vsize += c.vsize; }
+            TxCategory::OpReturnOther => { opreturn_other_count += 1; opreturn_other_vsize += c.vsize; }
+            TxCategory::Financial => { financial_count += 1; financial_vsize += c.vsize; }
+        }
+
+        if c.has_taproot_spend { taproot_spend_count += 1; }
+        if c.has_taproot_output { taproot_output_count += 1; }
+    }
+
+    let user_tx = tx_count.saturating_sub(1);
+    let data_count = rune_count + brc20_count + inscription_count
+        + opnet_count + stamp_count + counterparty_count + omni_count
+        + opreturn_other_count;
+    let financial_count = user_tx.saturating_sub(data_count);
+
+    BlockStats {
+        height,
+        time: block_time,
+        total_out,
+        total_fee,
+        tx_count,
+        financial_count,
+        rune_count,
+        brc20_count,
+        inscription_count,
+        opnet_count,
+        stamp_count,
+        counterparty_count,
+        omni_count,
+        opreturn_other_count,
+        other_data_count: 0,
+        total_vsize,
+        financial_vsize,
+        rune_vsize,
+        brc20_vsize,
+        inscription_vsize,
+        opnet_vsize,
+        stamp_vsize,
+        counterparty_vsize,
+        omni_vsize,
+        opreturn_other_vsize,
+        other_data_vsize: 0,
+        oversized_opreturn_count,
+        max_opreturn_size,
+        taproot_spend_count,
+        taproot_output_count,
+    }
+}
+
 #[derive(Clone)]
 pub struct RpcClient {
     url: String,
@@ -501,195 +746,10 @@ impl RpcClient {
             let total_fee = batch[0]["totalfee"].as_u64().unwrap_or(0);
             let block_time = batch[1]["time"].as_u64().unwrap_or(0);
 
-            let txs = batch[1]["tx"].as_array();
-            let mut tx_count = 0usize;
-            // Mutually exclusive protocol buckets:
-            let mut rune_count = 0usize;
-            let mut brc20_count = 0usize;
-            let mut inscription_count = 0usize; // ordinals excl. BRC-20
-            let mut opnet_count = 0usize;
-            let mut stamp_count = 0usize;
-            let mut counterparty_count = 0usize;
-            let mut omni_count = 0usize;
-            let mut opreturn_other_count = 0usize;
-            let mut other_data_count = 0usize;
-            let mut financial_count = 0usize;
-            // Per-protocol vsize:
-            let mut total_vsize = 0u64;
-            let mut financial_vsize = 0u64;
-            let mut rune_vsize = 0u64;
-            let mut brc20_vsize = 0u64;
-            let mut inscription_vsize = 0u64;
-            let mut opnet_vsize = 0u64;
-            let mut stamp_vsize = 0u64;
-            let mut counterparty_vsize = 0u64;
-            let mut omni_vsize = 0u64;
-            let mut opreturn_other_vsize = 0u64;
-            // Non-exclusive metrics:
-            let mut oversized_opreturn_count = 0usize;
-            let mut max_opreturn_size = 0usize;
-            let mut taproot_spend_count = 0usize;
-            let mut taproot_output_count = 0usize;
-
-            if let Some(txs) = txs {
-                tx_count = txs.len();
-                for tx in txs {
-                    let is_coinbase = tx["vin"]
-                        .as_array()
-                        .map(|v| v.iter().any(|i| !i["coinbase"].is_null()))
-                        .unwrap_or(false);
-                    let vsize = tx["vsize"].as_u64().unwrap_or(0);
-                    total_vsize += vsize;
-                    if is_coinbase {
-                        continue;
-                    }
-
-                    // --- Scan outputs ---
-                    let mut has_opreturn = false;
-                    let mut has_rune = false;
-                    let mut has_counterparty = false;
-                    let mut has_omni = false;
-                    let mut has_multisig = false;
-                    let mut has_taproot_output = false;
-                    if let Some(outs) = tx["vout"].as_array() {
-                        for o in outs {
-                            let script_type = o["scriptPubKey"]["type"].as_str().unwrap_or("");
-                            if script_type == "nulldata" {
-                                has_opreturn = true;
-                                let script_hex = o["scriptPubKey"]["hex"]
-                                    .as_str()
-                                    .unwrap_or("");
-                                let script_size = script_hex.len() / 2;
-                                if script_size > max_opreturn_size {
-                                    max_opreturn_size = script_size;
-                                }
-                                if script_size > 83 {
-                                    oversized_opreturn_count += 1;
-                                }
-                                if script_hex.starts_with("6a5d") {
-                                    has_rune = true;
-                                }
-                                if script_hex.contains("434e545250525459") {
-                                    has_counterparty = true;
-                                }
-                                if script_hex.contains("6f6d6e69") {
-                                    has_omni = true;
-                                }
-                            }
-                            if script_type == "multisig" {
-                                has_multisig = true;
-                            }
-                            if script_type == "witness_v1_taproot" {
-                                has_taproot_output = true;
-                            }
-                        }
-                    }
-
-                    // --- Scan inputs/witness ---
-                    let mut has_inscription = false;
-                    let mut has_brc20 = false;
-                    let mut has_opnet = false;
-                    let mut has_taproot_spend = false;
-                    if let Some(ins) = tx["vin"].as_array() {
-                        for input in ins {
-                            if input["prevout"]["scriptPubKey"]["type"].as_str()
-                                == Some("witness_v1_taproot")
-                            {
-                                has_taproot_spend = true;
-                            }
-                            if let Some(witness) = input["txinwitness"].as_array() {
-                                // OPNET: exactly 5 witness items, control block (item[4]) = 65 bytes (130 hex),
-                                // tapscript (item[3]) contains "026f70" (2-byte push of "op")
-                                if witness.len() == 5 {
-                                    let ctrl = witness[4].as_str().unwrap_or("");
-                                    let tapscript = witness[3].as_str().unwrap_or("");
-                                    if ctrl.len() == 130 && tapscript.contains("026f70") {
-                                        has_opnet = true;
-                                    }
-                                }
-                                for item in witness {
-                                    if let Some(hex) = item.as_str() {
-                                        if hex.contains("0063036f7264") {
-                                            has_inscription = true;
-                                            if hex.contains("6272632d3230") {
-                                                has_brc20 = true;
-                                            }
-                                        } else if hex.len() > 1040 {
-                                            has_inscription = true;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // --- Taproot (non-exclusive, counted independently) ---
-                    if has_taproot_spend { taproot_spend_count += 1; }
-                    if has_taproot_output { taproot_output_count += 1; }
-
-                    // --- Classify into exactly one bucket (priority order) ---
-                    if has_brc20 {
-                        brc20_count += 1; brc20_vsize += vsize;
-                    } else if has_inscription {
-                        inscription_count += 1; inscription_vsize += vsize;
-                    } else if has_opnet {
-                        opnet_count += 1; opnet_vsize += vsize;
-                    } else if has_rune {
-                        rune_count += 1; rune_vsize += vsize;
-                    } else if has_counterparty {
-                        counterparty_count += 1; counterparty_vsize += vsize;
-                    } else if has_omni {
-                        omni_count += 1; omni_vsize += vsize;
-                    } else if has_multisig && !has_opreturn {
-                        stamp_count += 1; stamp_vsize += vsize;
-                    } else if has_opreturn {
-                        opreturn_other_count += 1; opreturn_other_vsize += vsize;
-                    } else {
-                        financial_count += 1; financial_vsize += vsize;
-                        continue; // not a data tx
-                    }
-                }
-            }
-
-            let user_tx = tx_count.saturating_sub(1); // exclude coinbase
-            let data_count = rune_count + brc20_count + inscription_count
-                + opnet_count + stamp_count + counterparty_count + omni_count
-                + opreturn_other_count;
-            // Sanity: if there are more data txs than user txs, clamp
-            let financial_count = user_tx.saturating_sub(data_count);
-
-            all_stats.push(BlockStats {
-                height: *height,
-                time: block_time,
-                total_out,
-                total_fee,
-                tx_count,
-                financial_count,
-                rune_count,
-                brc20_count,
-                inscription_count,
-                opnet_count,
-                stamp_count,
-                counterparty_count,
-                omni_count,
-                opreturn_other_count,
-                other_data_count: 0,
-                total_vsize,
-                financial_vsize,
-                rune_vsize,
-                brc20_vsize,
-                inscription_vsize,
-                opnet_vsize,
-                stamp_vsize,
-                counterparty_vsize,
-                omni_vsize,
-                opreturn_other_vsize,
-                other_data_vsize: 0,
-                oversized_opreturn_count,
-                max_opreturn_size,
-                taproot_spend_count,
-                taproot_output_count,
-            });
+            let txs = batch[1]["tx"].as_array()
+                .map(|v| v.as_slice())
+                .unwrap_or(&[]);
+            all_stats.push(classify_block(txs, total_out, total_fee, *height, block_time));
         }
 
         Ok(all_stats)
@@ -817,5 +877,342 @@ impl RpcClient {
             recent_block_versions,
             ..Default::default()
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    // --- WarningsField tests ---
+
+    #[test]
+    fn warnings_none() {
+        let w: WarningsField = serde_json::from_value(json!(null)).unwrap_or_default();
+        assert_eq!(w.as_str(), "");
+    }
+
+    #[test]
+    fn warnings_single() {
+        let w: WarningsField = serde_json::from_value(json!("some warning")).unwrap();
+        assert_eq!(w.as_str(), "some warning");
+    }
+
+    #[test]
+    fn warnings_multiple() {
+        let w: WarningsField = serde_json::from_value(json!(["warn1", "warn2"])).unwrap();
+        assert_eq!(w.as_str(), "warn1; warn2");
+    }
+
+    // --- BlockStats serde tests ---
+
+    #[test]
+    fn blockstats_roundtrip() {
+        let stats = BlockStats {
+            height: 800000,
+            time: 1700000000,
+            total_out: 5000000000,
+            total_fee: 1000000,
+            tx_count: 3000,
+            financial_count: 2900,
+            rune_count: 50,
+            brc20_count: 10,
+            inscription_count: 20,
+            opnet_count: 5,
+            stamp_count: 3,
+            counterparty_count: 2,
+            omni_count: 1,
+            opreturn_other_count: 9,
+            other_data_count: 0,
+            total_vsize: 999000,
+            financial_vsize: 900000,
+            rune_vsize: 50000,
+            brc20_vsize: 10000,
+            inscription_vsize: 20000,
+            opnet_vsize: 5000,
+            stamp_vsize: 3000,
+            counterparty_vsize: 2000,
+            omni_vsize: 1000,
+            opreturn_other_vsize: 8000,
+            other_data_vsize: 0,
+            oversized_opreturn_count: 5,
+            max_opreturn_size: 200,
+            taproot_spend_count: 100,
+            taproot_output_count: 150,
+        };
+        let json_str = serde_json::to_string(&stats).unwrap();
+        let deserialized: BlockStats = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(deserialized.height, stats.height);
+        assert_eq!(deserialized.total_vsize, stats.total_vsize);
+        assert_eq!(deserialized.rune_vsize, stats.rune_vsize);
+    }
+
+    #[test]
+    fn blockstats_legacy_compat() {
+        // JSON missing vsize fields should default to 0
+        let json_str = r#"{"height":800000,"time":1700000000,"total_out":5000000000,"total_fee":1000000,"tx_count":3000,"financial_count":2900,"rune_count":50,"brc20_count":10,"inscription_count":20,"opnet_count":5,"stamp_count":3,"counterparty_count":2,"omni_count":1,"opreturn_other_count":9,"other_data_count":0,"oversized_opreturn_count":5,"max_opreturn_size":200,"taproot_spend_count":100,"taproot_output_count":150}"#;
+        let stats: BlockStats = serde_json::from_str(json_str).unwrap();
+        assert_eq!(stats.total_vsize, 0);
+        assert_eq!(stats.financial_vsize, 0);
+        assert_eq!(stats.rune_vsize, 0);
+    }
+
+    // --- classify_tx tests ---
+
+    fn make_financial_tx() -> Value {
+        json!({
+            "vsize": 250,
+            "vin": [{"txid": "abc", "vout": 0}],
+            "vout": [{"scriptPubKey": {"type": "pubkeyhash", "hex": "76a914..."}}]
+        })
+    }
+
+    fn make_coinbase_tx() -> Value {
+        json!({
+            "vsize": 200,
+            "vin": [{"coinbase": "0123456789"}],
+            "vout": [{"scriptPubKey": {"type": "pubkeyhash", "hex": "76a914..."}}]
+        })
+    }
+
+    #[test]
+    fn classify_coinbase() {
+        let c = classify_tx(&make_coinbase_tx());
+        assert_eq!(c.category, TxCategory::Coinbase);
+        assert_eq!(c.vsize, 200);
+    }
+
+    #[test]
+    fn classify_financial() {
+        let c = classify_tx(&make_financial_tx());
+        assert_eq!(c.category, TxCategory::Financial);
+        assert_eq!(c.vsize, 250);
+        assert!(!c.has_taproot_spend);
+        assert!(!c.has_taproot_output);
+    }
+
+    #[test]
+    fn classify_rune() {
+        let tx = json!({
+            "vsize": 300,
+            "vin": [{"txid": "abc", "vout": 0}],
+            "vout": [{"scriptPubKey": {"type": "nulldata", "hex": "6a5d0401020304"}}]
+        });
+        let c = classify_tx(&tx);
+        assert_eq!(c.category, TxCategory::Rune);
+    }
+
+    #[test]
+    fn classify_inscription() {
+        let tx = json!({
+            "vsize": 500,
+            "vin": [{
+                "txid": "abc", "vout": 0,
+                "txinwitness": ["deadbeef", "0063036f726401010a746578742f706c61696e"]
+            }],
+            "vout": [{"scriptPubKey": {"type": "witness_v1_taproot", "hex": "5120..."}}]
+        });
+        let c = classify_tx(&tx);
+        assert_eq!(c.category, TxCategory::Inscription);
+    }
+
+    #[test]
+    fn classify_brc20() {
+        // BRC-20 has ordinals envelope + "brc-20" payload
+        let tx = json!({
+            "vsize": 400,
+            "vin": [{
+                "txid": "abc", "vout": 0,
+                "txinwitness": ["deadbeef", "0063036f72646272632d3230"]
+            }],
+            "vout": [{"scriptPubKey": {"type": "witness_v1_taproot", "hex": "5120..."}}]
+        });
+        let c = classify_tx(&tx);
+        assert_eq!(c.category, TxCategory::Brc20);
+    }
+
+    #[test]
+    fn classify_large_witness_inscription() {
+        // Witness item > 1040 hex chars (520 bytes) → Inscription
+        let large_hex = "ab".repeat(521); // 1042 hex chars
+        let tx = json!({
+            "vsize": 600,
+            "vin": [{"txid": "abc", "vout": 0, "txinwitness": [large_hex]}],
+            "vout": [{"scriptPubKey": {"type": "pubkeyhash", "hex": "76a914..."}}]
+        });
+        let c = classify_tx(&tx);
+        assert_eq!(c.category, TxCategory::Inscription);
+    }
+
+    #[test]
+    fn classify_opnet() {
+        // OPNET: 5 witness items, control block 130 hex, tapscript contains "026f70"
+        let ctrl = "a".repeat(130);
+        let tx = json!({
+            "vsize": 350,
+            "vin": [{"txid": "abc", "vout": 0, "txinwitness": ["sig", "item1", "item2", "deadbeef026f70cafe", ctrl]}],
+            "vout": [{"scriptPubKey": {"type": "pubkeyhash", "hex": "76a914..."}}]
+        });
+        let c = classify_tx(&tx);
+        assert_eq!(c.category, TxCategory::Opnet);
+    }
+
+    #[test]
+    fn classify_counterparty() {
+        let tx = json!({
+            "vsize": 250,
+            "vin": [{"txid": "abc", "vout": 0}],
+            "vout": [{"scriptPubKey": {"type": "nulldata", "hex": "6a28434e545250525459abcdef"}}]
+        });
+        let c = classify_tx(&tx);
+        assert_eq!(c.category, TxCategory::Counterparty);
+    }
+
+    #[test]
+    fn classify_omni() {
+        let tx = json!({
+            "vsize": 250,
+            "vin": [{"txid": "abc", "vout": 0}],
+            "vout": [{"scriptPubKey": {"type": "nulldata", "hex": "6a146f6d6e69abcdef"}}]
+        });
+        let c = classify_tx(&tx);
+        assert_eq!(c.category, TxCategory::Omni);
+    }
+
+    #[test]
+    fn classify_stamp() {
+        // Bare multisig with no OP_RETURN
+        let tx = json!({
+            "vsize": 350,
+            "vin": [{"txid": "abc", "vout": 0}],
+            "vout": [{"scriptPubKey": {"type": "multisig", "hex": "5121..."}}]
+        });
+        let c = classify_tx(&tx);
+        assert_eq!(c.category, TxCategory::Stamp);
+    }
+
+    #[test]
+    fn classify_opreturn_other() {
+        // OP_RETURN that doesn't match any known protocol
+        let tx = json!({
+            "vsize": 220,
+            "vin": [{"txid": "abc", "vout": 0}],
+            "vout": [{"scriptPubKey": {"type": "nulldata", "hex": "6a0c48656c6c6f20576f726c64"}}]
+        });
+        let c = classify_tx(&tx);
+        assert_eq!(c.category, TxCategory::OpReturnOther);
+    }
+
+    #[test]
+    fn classify_oversized_opreturn() {
+        // OP_RETURN with >83 bytes (>166 hex chars)
+        let hex = "6a".to_string() + &"ff".repeat(90); // 91 bytes total
+        let tx = json!({
+            "vsize": 250,
+            "vin": [{"txid": "abc", "vout": 0}],
+            "vout": [{"scriptPubKey": {"type": "nulldata", "hex": hex}}]
+        });
+        let c = classify_tx(&tx);
+        assert_eq!(c.oversized_opreturn_count, 1);
+        assert_eq!(c.max_opreturn_size, 91);
+    }
+
+    #[test]
+    fn classify_taproot_tracking() {
+        let tx = json!({
+            "vsize": 150,
+            "vin": [{"txid": "abc", "vout": 0, "prevout": {"scriptPubKey": {"type": "witness_v1_taproot"}}}],
+            "vout": [{"scriptPubKey": {"type": "witness_v1_taproot", "hex": "5120..."}}]
+        });
+        let c = classify_tx(&tx);
+        assert_eq!(c.category, TxCategory::Financial);
+        assert!(c.has_taproot_spend);
+        assert!(c.has_taproot_output);
+    }
+
+    // --- Priority tests ---
+
+    #[test]
+    fn priority_brc20_beats_inscription() {
+        // A tx with both ordinals envelope and "brc-20" should be BRC-20, not Inscription
+        let tx = json!({
+            "vsize": 400,
+            "vin": [{"txid": "abc", "vout": 0, "txinwitness": ["0063036f72646272632d3230"]}],
+            "vout": [{"scriptPubKey": {"type": "pubkeyhash", "hex": "76a914..."}}]
+        });
+        let c = classify_tx(&tx);
+        assert_eq!(c.category, TxCategory::Brc20);
+    }
+
+    #[test]
+    fn priority_rune_beats_stamp() {
+        // Tx with both rune OP_RETURN and multisig should be Rune
+        let tx = json!({
+            "vsize": 300,
+            "vin": [{"txid": "abc", "vout": 0}],
+            "vout": [
+                {"scriptPubKey": {"type": "nulldata", "hex": "6a5d0401020304"}},
+                {"scriptPubKey": {"type": "multisig", "hex": "5121..."}}
+            ]
+        });
+        let c = classify_tx(&tx);
+        assert_eq!(c.category, TxCategory::Rune);
+    }
+
+    #[test]
+    fn multisig_with_opreturn_is_opreturn_other() {
+        // Multisig + OP_RETURN (non-rune) → OpReturnOther, not Stamp
+        let tx = json!({
+            "vsize": 300,
+            "vin": [{"txid": "abc", "vout": 0}],
+            "vout": [
+                {"scriptPubKey": {"type": "nulldata", "hex": "6a0c48656c6c6f"}},
+                {"scriptPubKey": {"type": "multisig", "hex": "5121..."}}
+            ]
+        });
+        let c = classify_tx(&tx);
+        assert_eq!(c.category, TxCategory::OpReturnOther);
+    }
+
+    // --- classify_block tests ---
+
+    #[test]
+    fn classify_block_sums() {
+        let coinbase = make_coinbase_tx();
+        let fin1 = make_financial_tx();
+        let fin2 = make_financial_tx();
+        let rune = json!({
+            "vsize": 300,
+            "vin": [{"txid": "abc", "vout": 0}],
+            "vout": [{"scriptPubKey": {"type": "nulldata", "hex": "6a5d0401020304"}}]
+        });
+        let txs = vec![coinbase, fin1, fin2, rune];
+        let stats = classify_block(&txs, 5000000000, 100000, 800000, 1700000000);
+
+        assert_eq!(stats.tx_count, 4);
+        // user_tx = 3, data = 1 (rune), financial = 2
+        assert_eq!(stats.financial_count, 2);
+        assert_eq!(stats.rune_count, 1);
+        // All other categories should be 0
+        assert_eq!(stats.brc20_count, 0);
+        assert_eq!(stats.inscription_count, 0);
+        assert_eq!(stats.opnet_count, 0);
+        assert_eq!(stats.stamp_count, 0);
+        assert_eq!(stats.counterparty_count, 0);
+        assert_eq!(stats.omni_count, 0);
+        assert_eq!(stats.opreturn_other_count, 0);
+        // Buckets sum to user_tx count
+        let bucket_sum = stats.financial_count + stats.rune_count + stats.brc20_count
+            + stats.inscription_count + stats.opnet_count + stats.stamp_count
+            + stats.counterparty_count + stats.omni_count + stats.opreturn_other_count;
+        assert_eq!(bucket_sum, stats.tx_count - 1); // minus coinbase
+    }
+
+    #[test]
+    fn classify_block_empty() {
+        let stats = classify_block(&[], 0, 0, 800000, 1700000000);
+        assert_eq!(stats.tx_count, 0);
+        assert_eq!(stats.financial_count, 0);
     }
 }

@@ -3,7 +3,12 @@ RUN apt-get update && apt-get install -y pkg-config libssl-dev && rm -rf /var/li
 WORKDIR /app
 COPY Cargo.toml Cargo.lock* ./
 COPY src/ src/
+
+FROM builder AS test
+RUN cargo test --release
+
+FROM builder AS build
 RUN cargo build --release
 
 FROM scratch AS export
-COPY --from=builder /app/target/release/knots-tui /knots-tui
+COPY --from=build /app/target/release/knots-tui /knots-tui

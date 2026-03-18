@@ -1830,3 +1830,252 @@ fn format_hashrate(hps: f64) -> String {
         format!("~{:.2} H/s", hps)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- format_compact ---
+
+    #[test]
+    fn compact_below_1000() {
+        assert_eq!(format_compact(0), "0");
+        assert_eq!(format_compact(999), "999");
+    }
+
+    #[test]
+    fn compact_at_1000() {
+        assert_eq!(format_compact(1000), "1.0k");
+    }
+
+    #[test]
+    fn compact_below_10000() {
+        assert_eq!(format_compact(1400), "1.4k");
+        assert_eq!(format_compact(9999), "10.0k");
+    }
+
+    #[test]
+    fn compact_at_10000() {
+        assert_eq!(format_compact(10000), "10k");
+        assert_eq!(format_compact(52000), "52k");
+        assert_eq!(format_compact(999999), "999k");
+    }
+
+    #[test]
+    fn compact_at_million() {
+        assert_eq!(format_compact(1000000), "1.0m");
+        assert_eq!(format_compact(1200000), "1.2m");
+        assert_eq!(format_compact(9999999), "10.0m");
+    }
+
+    #[test]
+    fn compact_above_10m() {
+        assert_eq!(format_compact(10000000), "10m");
+        assert_eq!(format_compact(50000000), "50m");
+    }
+
+    // --- format_btc ---
+
+    #[test]
+    fn btc_zero() {
+        assert_eq!(format_btc(0), "0.00 BTC");
+    }
+
+    #[test]
+    fn btc_one() {
+        assert_eq!(format_btc(100_000_000), "1.00 BTC");
+    }
+
+    #[test]
+    fn btc_above_1000() {
+        assert_eq!(format_btc(100_000_000_000), "1000 BTC");
+    }
+
+    // --- format_btc_fees ---
+
+    #[test]
+    fn btc_fees_zero() {
+        assert_eq!(format_btc_fees(0), "0.000 BTC");
+    }
+
+    #[test]
+    fn btc_fees_typical() {
+        assert_eq!(format_btc_fees(12345678), "0.123 BTC");
+    }
+
+    // --- format_number ---
+
+    #[test]
+    fn number_zero() {
+        assert_eq!(format_number(0), "0");
+    }
+
+    #[test]
+    fn number_below_1000() {
+        assert_eq!(format_number(999), "999");
+    }
+
+    #[test]
+    fn number_at_1000() {
+        assert_eq!(format_number(1000), "1,000");
+    }
+
+    #[test]
+    fn number_million() {
+        assert_eq!(format_number(1000000), "1,000,000");
+    }
+
+    // --- format_bytes ---
+
+    #[test]
+    fn bytes_zero() {
+        assert_eq!(format_bytes(0), "0 B");
+    }
+
+    #[test]
+    fn bytes_kb() {
+        assert_eq!(format_bytes(1024), "1.0 KB");
+    }
+
+    #[test]
+    fn bytes_mb() {
+        assert_eq!(format_bytes(1024 * 1024), "1.00 MB");
+    }
+
+    #[test]
+    fn bytes_gb() {
+        assert_eq!(format_bytes(1024 * 1024 * 1024), "1.00 GB");
+    }
+
+    #[test]
+    fn bytes_tb() {
+        assert_eq!(format_bytes(1024u64 * 1024 * 1024 * 1024), "1.00 TB");
+    }
+
+    // --- format_bytes_short ---
+
+    #[test]
+    fn bytes_short_zero() {
+        assert_eq!(format_bytes_short(0), "0B");
+    }
+
+    #[test]
+    fn bytes_short_kb() {
+        assert_eq!(format_bytes_short(1024), "1K");
+    }
+
+    #[test]
+    fn bytes_short_mb() {
+        assert_eq!(format_bytes_short(1024 * 1024), "1.0M");
+    }
+
+    #[test]
+    fn bytes_short_gb() {
+        assert_eq!(format_bytes_short(1024 * 1024 * 1024), "1.0G");
+    }
+
+    // --- format_duration ---
+
+    #[test]
+    fn duration_zero() {
+        assert_eq!(format_duration(0), "0m");
+    }
+
+    #[test]
+    fn duration_minutes() {
+        assert_eq!(format_duration(300), "5m");
+    }
+
+    #[test]
+    fn duration_hours() {
+        assert_eq!(format_duration(3661), "1h 1m");
+    }
+
+    #[test]
+    fn duration_days() {
+        assert_eq!(format_duration(90061), "1d 1h 1m");
+    }
+
+    // --- format_hashrate ---
+
+    #[test]
+    fn hashrate_gh() {
+        assert_eq!(format_hashrate(1e9), "~1.00 GH/s");
+    }
+
+    #[test]
+    fn hashrate_th() {
+        assert_eq!(format_hashrate(1e12), "~1.00 TH/s");
+    }
+
+    #[test]
+    fn hashrate_ph() {
+        assert_eq!(format_hashrate(1e15), "~1.00 PH/s");
+    }
+
+    #[test]
+    fn hashrate_eh() {
+        assert_eq!(format_hashrate(1e18), "~1.00 EH/s");
+    }
+
+    #[test]
+    fn hashrate_low() {
+        assert_eq!(format_hashrate(1000.0), "~1000.00 H/s");
+    }
+
+    // --- service_bit_name ---
+
+    #[test]
+    fn service_bit_known() {
+        assert_eq!(service_bit_name(0), "NODE_NETWORK");
+        assert_eq!(service_bit_name(3), "NODE_WITNESS");
+        assert_eq!(service_bit_name(10), "NODE_NETWORK_LIMITED");
+        assert_eq!(service_bit_name(24), "NODE_P2P_V2");
+    }
+
+    #[test]
+    fn service_bit_unknown() {
+        assert_eq!(service_bit_name(5), "");
+        assert_eq!(service_bit_name(63), "");
+    }
+
+    // --- bit_detail ---
+
+    #[test]
+    fn bit_detail_csv() {
+        let (title, _desc) = bit_detail(0);
+        assert!(title.contains("csv"));
+    }
+
+    #[test]
+    fn bit_detail_segwit() {
+        let (title, _desc) = bit_detail(1);
+        assert!(title.contains("segwit"));
+    }
+
+    #[test]
+    fn bit_detail_taproot() {
+        let (title, _desc) = bit_detail(2);
+        assert!(title.contains("taproot"));
+    }
+
+    #[test]
+    fn bit_detail_bip110() {
+        let (title, _desc) = bit_detail(4);
+        assert!(title.contains("BIP110"));
+    }
+
+    #[test]
+    fn bit_detail_unassigned() {
+        let (title, _desc) = bit_detail(3);
+        assert!(title.contains("Unassigned"));
+    }
+
+    #[test]
+    fn bit_detail_asicboost() {
+        let (title, _desc) = bit_detail(13);
+        assert!(title.contains("ASICBoost"));
+        let (title2, _) = bit_detail(28);
+        assert!(title2.contains("ASICBoost"));
+    }
+}

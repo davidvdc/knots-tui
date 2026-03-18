@@ -78,7 +78,7 @@ pub struct AnalyticsData {
     pub missing_blocks: u64,          // gaps in the dataset
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Screen {
     Dashboard = 0,
     KnownPeers = 1,
@@ -576,4 +576,35 @@ async fn main() -> anyhow::Result<()> {
     stdout().execute(crossterm::cursor::Show)?;
     println!();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn screen_from_u8_dashboard() {
+        assert_eq!(Screen::from_u8(0), Screen::Dashboard);
+    }
+
+    #[test]
+    fn screen_from_u8_known_peers() {
+        assert_eq!(Screen::from_u8(1), Screen::KnownPeers);
+    }
+
+    #[test]
+    fn screen_from_u8_signaling() {
+        assert_eq!(Screen::from_u8(2), Screen::Signaling);
+    }
+
+    #[test]
+    fn screen_from_u8_analytics() {
+        assert_eq!(Screen::from_u8(3), Screen::Analytics);
+    }
+
+    #[test]
+    fn screen_from_u8_invalid() {
+        assert_eq!(Screen::from_u8(4), Screen::Dashboard);
+        assert_eq!(Screen::from_u8(255), Screen::Dashboard);
+    }
 }
