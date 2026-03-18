@@ -121,7 +121,7 @@ fn draw_body(f: &mut Frame, area: Rect, data: &NodeData, peer_scroll: u16, block
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(11), // 8 blocks + header + borders
-            Constraint::Length(3),  // 24h analytics summary
+            Constraint::Length(4),  // 24h analytics summary (header + data + borders)
             Constraint::Min(8),    // peers fills the rest
         ])
         .split(rows[1]);
@@ -409,17 +409,22 @@ fn draw_analytics_summary(f: &mut Frame, area: Rect, analytics: &AnalyticsData) 
     let now = chrono::Utc::now().timestamp() as u64;
     let cutoff = now.saturating_sub(86400);
     let agg = aggregate_period(&analytics.stats, cutoff);
-    let content = if agg.blocks > 0 {
-        Line::from(format_agg_spans("24h", &agg))
+    let lines = if agg.blocks > 0 {
+        vec![
+            Line::from(format_agg_header()),
+            Line::from(format_agg_spans("24h", &agg)),
+        ]
     } else {
-        Line::from(Span::styled("  Waiting for block analysis data...", Style::default().fg(Color::DarkGray)))
+        vec![
+            Line::from(Span::styled("  Waiting for block analysis data...", Style::default().fg(Color::DarkGray))),
+        ]
     };
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .title(" Analytics ")
         .style(Style::default().fg(Color::Cyan));
-    let paragraph = Paragraph::new(content).block(block);
+    let paragraph = Paragraph::new(lines).block(block);
     f.render_widget(paragraph, area);
 }
 
@@ -1628,6 +1633,32 @@ impl DayAgg {
 
 fn pct_str(n: u64, total: u64) -> String {
     if total > 0 { format!("{:.1}", n as f64 / total as f64 * 100.0) } else { "0.0".into() }
+}
+
+/// Header line matching format_agg_spans layout
+fn format_agg_header() -> Vec<Span<'static>> {
+    let hdr = Style::default().fg(Color::Cyan).bold();
+    let dim = Style::default().fg(Color::DarkGray);
+    let detail = Style::default().fg(Color::LightMagenta).bold();
+    let red = Style::default().fg(Color::Red).bold();
+    vec![
+        Span::styled(format!("{:<5}", ""), hdr),
+        Span::styled(format!("{:>4} {:>4} ", "Blks", ""), hdr),
+        Span::styled(format!("{:>7} {:>4}", "TXs", ""), hdr),
+        Span::styled(format!("Fin%  "), hdr),
+        Span::styled(format!("Sz%   "), hdr),
+        Span::styled(format!("Dat%  "), hdr),
+        Span::styled(format!("Sz%   "), hdr),
+        Span::styled("| ", dim),
+        Span::styled("Run   ", detail),
+        Span::styled("Ins   ", detail),
+        Span::styled("BRC   ", detail),
+        Span::styled("OPN   ", detail),
+        Span::styled("Stp   ", detail),
+        Span::styled("OPR   ", detail),
+        Span::styled("| ", dim),
+        Span::styled(">83B ", red),
+    ]
 }
 
 /// Format a DayAgg into styled spans for a single-line summary.
