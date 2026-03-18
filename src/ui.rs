@@ -409,23 +409,25 @@ fn draw_analytics_summary(f: &mut Frame, area: Rect, analytics: &AnalyticsData) 
     let now = chrono::Utc::now().timestamp() as u64;
     let cutoff = now.saturating_sub(86400);
     let agg = aggregate_period(&analytics.stats, cutoff);
-    let lines = if agg.blocks > 0 {
-        vec![
-            Line::from(format_agg_header()),
-            Line::from(format_agg_spans("24h", &agg)),
-        ]
-    } else {
-        vec![
-            Line::from(Span::styled("  Waiting for block analysis data...", Style::default().fg(Color::DarkGray))),
-        ]
-    };
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .title(" Analytics ")
         .style(Style::default().fg(Color::Cyan));
-    let paragraph = Paragraph::new(lines).block(block);
-    f.render_widget(paragraph, area);
+    if agg.blocks > 0 {
+        let rows = vec![analytics_data_row("24h", &agg)];
+        let table = Table::new(rows, analytics_widths())
+            .header(analytics_header_row())
+            .block(block);
+        f.render_widget(table, area);
+    } else {
+        let paragraph = Paragraph::new(Line::from(Span::styled(
+            "  Waiting for block analysis data...",
+            Style::default().fg(Color::DarkGray),
+        )))
+        .block(block);
+        f.render_widget(paragraph, area);
+    }
 }
 
 fn draw_peers_table(f: &mut Frame, area: Rect, data: &NodeData, scroll: u16, focused: bool) {
@@ -1635,123 +1637,37 @@ fn pct_str(n: u64, total: u64) -> String {
     if total > 0 { format!("{:.1}", n as f64 / total as f64 * 100.0) } else { "0.0".into() }
 }
 
-/// Header line matching format_agg_spans layout
-fn format_agg_header() -> Vec<Span<'static>> {
-    let hdr = Style::default().fg(Color::Cyan).bold();
-    let dim = Style::default().fg(Color::DarkGray);
-    let detail = Style::default().fg(Color::LightMagenta).bold();
-    let red = Style::default().fg(Color::Red).bold();
-    vec![
-        Span::styled(format!("{:<5}", ""), hdr),
-        Span::styled(format!("{:>4} {:>4} ", "Blks", ""), hdr),
-        Span::styled(format!("{:>7} {:>4}", "TXs", ""), hdr),
-        Span::styled(format!("Fin%  "), hdr),
-        Span::styled(format!("Sz%   "), hdr),
-        Span::styled(format!("Dat%  "), hdr),
-        Span::styled(format!("Sz%   "), hdr),
-        Span::styled("| ", dim),
-        Span::styled("Run   ", detail),
-        Span::styled("Ins   ", detail),
-        Span::styled("BRC   ", detail),
-        Span::styled("OPN   ", detail),
-        Span::styled("Stp   ", detail),
-        Span::styled("OPR   ", detail),
-        Span::styled("| ", dim),
-        Span::styled(">83B ", red),
+fn analytics_widths() -> [Constraint; 22] {
+    [
+        Constraint::Length(10), // Date/Label
+        Constraint::Length(4),  // Blks
+        Constraint::Length(7),  // TXs
+        Constraint::Length(5),  // Fin%
+        Constraint::Length(5),  // FinSz
+        Constraint::Length(5),  // Dat%
+        Constraint::Length(5),  // DatSz
+        Constraint::Length(1),  // |
+        Constraint::Length(6),  // Rune count
+        Constraint::Length(5),  // Rune %
+        Constraint::Length(6),  // Insc count
+        Constraint::Length(5),  // Insc %
+        Constraint::Length(6),  // BRC count
+        Constraint::Length(5),  // BRC %
+        Constraint::Length(6),  // OPN count
+        Constraint::Length(5),  // OPN %
+        Constraint::Length(6),  // Stp count
+        Constraint::Length(5),  // Stp %
+        Constraint::Length(6),  // OPR count
+        Constraint::Length(5),  // OPR %
+        Constraint::Length(1),  // |
+        Constraint::Length(5),  // >83B
     ]
 }
 
-/// Format a DayAgg into styled spans for a single-line summary.
-/// label is shown first (e.g. "24h" or a date).
-fn format_agg_spans(label: &str, d: &DayAgg) -> Vec<Span<'static>> {
-    let data_tx = d.txs.saturating_sub(d.financial);
-    let data_vsize = d.total_vsize.saturating_sub(d.financial_vsize);
-    let detail_color = Color::LightMagenta;
-    let dim = Style::default().fg(Color::DarkGray);
-
-    let mut spans = vec![
-        Span::styled(format!("{:<5}", label), Style::default().fg(Color::White)),
-        Span::styled(format!("{:>4} blks ", format_compact(d.blocks)), dim),
-        Span::styled(format!("{:>7} txs ", format_compact(d.txs)), Style::default().fg(Color::White)),
-        Span::styled(format!("fin {}% ", pct_str(d.financial, d.txs)), Style::default().fg(Color::Green)),
-        Span::styled(format!("sz {}% ", pct_str(d.financial_vsize, d.total_vsize)), Style::default().fg(Color::Green)),
-        Span::styled(format!("dat {}% ", pct_str(data_tx, d.txs)), Style::default().fg(if data_tx > 0 { Color::Yellow } else { Color::DarkGray })),
-        Span::styled(format!("sz {}% ", pct_str(data_vsize, d.total_vsize)), Style::default().fg(if data_vsize > 0 { Color::Yellow } else { Color::DarkGray })),
-        Span::styled("| ", dim),
-    ];
-
-    let protos: Vec<(&str, u64)> = vec![
-        ("run", d.runes), ("ins", d.inscriptions), ("brc", d.brc20),
-        ("opn", d.opnet), ("stp", d.stamps), ("opr", d.opreturn_other),
-    ];
-    for (name, count) in protos {
-        let c = if count > 0 { detail_color } else { Color::DarkGray };
-        spans.push(Span::styled(format!("{} {} ", name, format_compact(count)), Style::default().fg(c)));
-    }
-
-    let c83 = if d.oversized_opreturn > 0 { Color::Red } else { Color::DarkGray };
-    spans.push(Span::styled("| ", dim));
-    spans.push(Span::styled(format!(">83B {}", format_compact(d.oversized_opreturn)), Style::default().fg(c83)));
-
-    spans
-}
-
-/// Aggregate stats within a time window into a single DayAgg
-fn aggregate_period(stats: &[BlockStats], min_time: u64) -> DayAgg {
-    let mut agg = DayAgg::new();
-    for s in stats {
-        if s.time >= min_time {
-            agg.add(s);
-        }
-    }
-    agg
-}
-
-fn render_analytics_table(f: &mut Frame, area: Rect, stats: &[BlockStats], missing: u64, scroll: u16) {
-    // Aggregate by day
-    let mut daily: BTreeMap<String, DayAgg> = BTreeMap::new();
-    for s in stats {
-        let date = chrono::DateTime::from_timestamp(s.time as i64, 0)
-            .map(|dt| dt.format("%Y-%m-%d").to_string())
-            .unwrap_or_default();
-        daily.entry(date).or_insert_with(DayAgg::new).add(s);
-    }
-    let sep = || Cell::from("|").style(Style::default().fg(Color::DarkGray));
-    let detail_color = Color::LightMagenta;
-
-    // Build rows newest first
-    let rows: Vec<Row> = daily.iter().rev().map(|(date, d)| {
-        let data_tx = d.txs.saturating_sub(d.financial);
-        let data_vsize = d.total_vsize.saturating_sub(d.financial_vsize);
-        let mut cells = vec![
-            Cell::from(date.clone()).style(Style::default().fg(Color::White)),
-            Cell::from(format!("{:>4}", format_compact(d.blocks))).style(Style::default().fg(Color::DarkGray)),
-            Cell::from(format!("{:>7}", format_compact(d.txs))).style(Style::default().fg(Color::White)),
-            Cell::from(format!("{}%", pct_str(d.financial, d.txs))).style(Style::default().fg(Color::Green)),
-            Cell::from(format!("{}%", pct_str(d.financial_vsize, d.total_vsize))).style(Style::default().fg(Color::Green)),
-            Cell::from(format!("{}%", pct_str(data_tx, d.txs))).style(Style::default().fg(if data_tx > 0 { Color::Yellow } else { Color::DarkGray })),
-            Cell::from(format!("{}%", pct_str(data_vsize, d.total_vsize))).style(Style::default().fg(if data_vsize > 0 { Color::Yellow } else { Color::DarkGray })),
-            sep(),
-        ];
-        // Per-protocol: tx count + % of data
-        let protos: Vec<u64> = vec![
-            d.runes, d.inscriptions, d.brc20, d.opnet, d.stamps, d.opreturn_other,
-        ];
-        for count in protos {
-            let c = if count > 0 { detail_color } else { Color::DarkGray };
-            cells.push(Cell::from(format!("{:>6}", format_compact(count))).style(Style::default().fg(c)));
-            cells.push(Cell::from(format!("{}%", pct_str(count, data_tx))).style(Style::default().fg(c)));
-        }
-        // >83B column
-        let c83 = if d.oversized_opreturn > 0 { Color::Red } else { Color::DarkGray };
-        cells.push(sep());
-        cells.push(Cell::from(format!("{:>5}", format_compact(d.oversized_opreturn))).style(Style::default().fg(c83)));
-        Row::new(cells)
-    }).collect();
-
+fn analytics_header_row() -> Row<'static> {
     let hdr = Style::default().fg(Color::Cyan).bold();
-    let hdr_detail = Style::default().fg(detail_color).bold();
-    let header = Row::new(vec![
+    let hdr_detail = Style::default().fg(Color::LightMagenta).bold();
+    Row::new(vec![
         Cell::from("Date").style(hdr),
         Cell::from("Blks").style(hdr),
         Cell::from("TXs").style(hdr),
@@ -1774,37 +1690,67 @@ fn render_analytics_table(f: &mut Frame, area: Rect, stats: &[BlockStats], missi
         Cell::from("%").style(hdr_detail),
         Cell::from("|").style(Style::default().fg(Color::DarkGray)),
         Cell::from(">83B").style(Style::default().fg(Color::Red).bold()),
-    ]);
+    ])
+}
 
-    let widths = [
-        Constraint::Length(10), // Date
-        Constraint::Length(4),  // Blks
-        Constraint::Length(7),  // TXs
-        Constraint::Length(5),  // Fin%
-        Constraint::Length(5),  // FinSz
-        Constraint::Length(5),  // Dat%
-        Constraint::Length(5),  // DatSz
-        Constraint::Length(1),  // |
-        Constraint::Length(6),  // Rune count
-        Constraint::Length(5),  // Rune %
-        Constraint::Length(6),  // Insc count
-        Constraint::Length(5),  // Insc %
-        Constraint::Length(6),  // BRC count
-        Constraint::Length(5),  // BRC %
-        Constraint::Length(6),  // OPN count
-        Constraint::Length(5),  // OPN %
-        Constraint::Length(6),  // Stp count
-        Constraint::Length(5),  // Stp %
-        Constraint::Length(6),  // OPR count
-        Constraint::Length(5),  // OPR %
-        Constraint::Length(1),  // |
-        Constraint::Length(5),  // >83B
+fn analytics_data_row(label: &str, d: &DayAgg) -> Row<'static> {
+    let sep = || Cell::from("|").style(Style::default().fg(Color::DarkGray));
+    let detail_color = Color::LightMagenta;
+    let data_tx = d.txs.saturating_sub(d.financial);
+    let data_vsize = d.total_vsize.saturating_sub(d.financial_vsize);
+    let mut cells = vec![
+        Cell::from(label.to_string()).style(Style::default().fg(Color::White)),
+        Cell::from(format!("{:>4}", format_compact(d.blocks))).style(Style::default().fg(Color::DarkGray)),
+        Cell::from(format!("{:>7}", format_compact(d.txs))).style(Style::default().fg(Color::White)),
+        Cell::from(format!("{}%", pct_str(d.financial, d.txs))).style(Style::default().fg(Color::Green)),
+        Cell::from(format!("{}%", pct_str(d.financial_vsize, d.total_vsize))).style(Style::default().fg(Color::Green)),
+        Cell::from(format!("{}%", pct_str(data_tx, d.txs))).style(Style::default().fg(if data_tx > 0 { Color::Yellow } else { Color::DarkGray })),
+        Cell::from(format!("{}%", pct_str(data_vsize, d.total_vsize))).style(Style::default().fg(if data_vsize > 0 { Color::Yellow } else { Color::DarkGray })),
+        sep(),
     ];
+    let protos: Vec<u64> = vec![
+        d.runes, d.inscriptions, d.brc20, d.opnet, d.stamps, d.opreturn_other,
+    ];
+    for count in protos {
+        let c = if count > 0 { detail_color } else { Color::DarkGray };
+        cells.push(Cell::from(format!("{:>6}", format_compact(count))).style(Style::default().fg(c)));
+        cells.push(Cell::from(format!("{}%", pct_str(count, data_tx))).style(Style::default().fg(c)));
+    }
+    let c83 = if d.oversized_opreturn > 0 { Color::Red } else { Color::DarkGray };
+    cells.push(sep());
+    cells.push(Cell::from(format!("{:>5}", format_compact(d.oversized_opreturn))).style(Style::default().fg(c83)));
+    Row::new(cells)
+}
 
-    let row_count = rows.len();
+/// Aggregate stats within a time window into a single DayAgg
+fn aggregate_period(stats: &[BlockStats], min_time: u64) -> DayAgg {
+    let mut agg = DayAgg::new();
+    for s in stats {
+        if s.time >= min_time {
+            agg.add(s);
+        }
+    }
+    agg
+}
+
+fn render_analytics_table(f: &mut Frame, area: Rect, stats: &[BlockStats], missing: u64, scroll: u16) {
+    // Aggregate by day
+    let mut daily: BTreeMap<String, DayAgg> = BTreeMap::new();
+    for s in stats {
+        let date = chrono::DateTime::from_timestamp(s.time as i64, 0)
+            .map(|dt| dt.format("%Y-%m-%d").to_string())
+            .unwrap_or_default();
+        daily.entry(date).or_insert_with(DayAgg::new).add(s);
+    }
+
+    // Build rows newest first
+    let rows: Vec<Row> = daily.iter().rev().map(|(date, d)| {
+        analytics_data_row(date, d)
+    }).collect();
+
     let block_count = stats.len();
-    let table = Table::new(rows, widths)
-        .header(header)
+    let table = Table::new(rows, analytics_widths())
+        .header(analytics_header_row())
         .block(
             Block::default()
                 .borders(Borders::ALL)
