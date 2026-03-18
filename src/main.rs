@@ -561,24 +561,22 @@ async fn main() -> anyhow::Result<()> {
                                 KeyCode::Char('+') | KeyCode::Char('=') => {
                                     if screen == Screen::Analytics && analytics.state != AnalyticsState::Running {
                                         // Extend analytics by another 30 days (~4320 blocks)
-                                        let tip = node_data.blockchain.blocks;
-                                        let old_start = tip.saturating_sub(analytics.depth);
+                                        // and resume any gaps from a previous Esc stop
                                         analytics.depth += 4320;
-                                        let new_start = tip.saturating_sub(analytics.depth);
-                                        let extend_heights: Vec<u64> = (new_start..old_start).rev().collect();
-                                        if !extend_heights.is_empty() {
-                                            let cached: HashSet<u64> = block_stats_cache.keys().copied().collect();
-                                            backfill_stop.store(false, Ordering::Relaxed);
-                                            let total = spawn_backfill(
-                                                &client, &stats_tx, &backfill_stop,
-                                                &[], extend_heights, &cached,
-                                            );
-                                            if total > 0 {
-                                                analytics.state = AnalyticsState::Running;
-                                                analytics.progress_current = 0;
-                                                analytics.progress_total = total;
-                                                analytics.missing_blocks += total;
-                                            }
+                                        let tip = node_data.blockchain.blocks;
+                                        let start = tip.saturating_sub(analytics.depth);
+                                        let all_heights: Vec<u64> = (start..=tip).rev().collect();
+                                        let cached: HashSet<u64> = block_stats_cache.keys().copied().collect();
+                                        backfill_stop.store(false, Ordering::Relaxed);
+                                        let total = spawn_backfill(
+                                            &client, &stats_tx, &backfill_stop,
+                                            &[], all_heights, &cached,
+                                        );
+                                        if total > 0 {
+                                            analytics.state = AnalyticsState::Running;
+                                            analytics.progress_current = 0;
+                                            analytics.progress_total = total;
+                                            analytics.missing_blocks = total;
                                         }
                                     }
                                 }
