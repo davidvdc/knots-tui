@@ -9,7 +9,7 @@ use crossterm::{
 };
 use futures::StreamExt;
 use ratatui::prelude::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::stdout;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU16, Ordering};
 use std::sync::Arc;
@@ -25,14 +25,12 @@ fn stats_file_path() -> std::path::PathBuf {
     path.join("blockstats.jsonl")
 }
 
-fn append_stats_to_file(stats: &[BlockStats]) {
+fn append_stats_to_file(stat: &BlockStats) {
     use std::io::Write;
     let path = stats_file_path();
     if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
-        for s in stats {
-            if let Ok(line) = serde_json::to_string(s) {
-                let _ = writeln!(f, "{}", line);
-            }
+        if let Ok(line) = serde_json::to_string(stat) {
+            let _ = writeln!(f, "{}", line);
         }
     }
 }
@@ -62,12 +60,12 @@ fn rewrite_stats_file(stats: &[BlockStats]) {
     }
 }
 
-/// State for the analytics task
+/// State for the analytics/block stats background task
 #[derive(Clone, PartialEq)]
 pub enum AnalyticsState {
-    Idle,           // waiting for user to press 's'
+    Idle,           // no data yet (waiting for first dashboard fetch)
     Running,        // backfill in progress
-    Done,           // analysis complete
+    Done,           // analysis complete (or stopped)
 }
 
 pub struct AnalyticsData {
@@ -111,6 +109,59 @@ struct Args {
     /// Refresh interval in seconds
     #[arg(long, default_value = "5")]
     interval: u64,
+}
+
+/// Spawn the unified block stats backfill task.
+/// Fetches recent blocks (by hash) first, then analytics backfill (by height, recent-to-old).
+fn spawn_backfill(
+    client: &RpcClient,
+    stats_tx: &mpsc::Sender<BlockStats>,
+    stop: &Arc<AtomicBool>,
+    recent_blocks: &[(u64, String)],
+    analytics_heights: Vec<u64>,
+    cached: &HashSet<u64>,
+) -> u64 {
+    // Recent blocks not yet cached (fetch by hash for efficiency)
+    let recent: Vec<(u64, String)> = recent_blocks
+        .iter()
+        .filter(|(h, _)| !cached.contains(h))
+        .cloned()
+        .collect();
+    // Analytics heights not yet cached and not in recent set
+    let recent_heights: HashSet<u64> = recent.iter().map(|(h, _)| *h).collect();
+    let backfill: Vec<u64> = analytics_heights
+        .into_iter()
+        .filter(|h| !cached.contains(h) && !recent_heights.contains(h))
+        .collect();
+
+    let total = (recent.len() + backfill.len()) as u64;
+    if total == 0 {
+        return 0;
+    }
+
+    let c = client.clone();
+    let tx = stats_tx.clone();
+    let stop = stop.clone();
+    tokio::spawn(async move {
+        // Phase 1: recent blocks (have hashes, one batch call each)
+        for (height, hash) in recent {
+            if stop.load(Ordering::Relaxed) { break; }
+            if let Ok(stats) = c.fetch_block_stats(&[(height, hash)]).await {
+                for s in stats {
+                    let _ = tx.send(s).await;
+                }
+            }
+        }
+        // Phase 2: analytics backfill (by height, recent-to-old)
+        for height in backfill {
+            if stop.load(Ordering::Relaxed) { break; }
+            if let Ok(stat) = c.fetch_block_stats_by_height(height).await {
+                let _ = tx.send(stat).await;
+            }
+        }
+    });
+
+    total
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -251,12 +302,9 @@ async fn main() -> anyhow::Result<()> {
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
     terminal.clear()?;
 
-    let (stats_tx, mut stats_rx) = mpsc::channel::<Vec<BlockStats>>(4);
-    let stats_client = client.clone();
-
-    // Analytics task channels and controls
-    let (analytics_tx, mut analytics_rx) = mpsc::channel::<BlockStats>(16);
-    let analytics_stop = Arc::new(AtomicBool::new(false));
+    // Unified block stats channel — serves both dashboard details and analytics
+    let (stats_tx, mut stats_rx) = mpsc::channel::<BlockStats>(16);
+    let backfill_stop = Arc::new(AtomicBool::new(false));
 
     let mut node_data = NodeData::default();
     let mut signaling_data = NodeData::default();
@@ -277,6 +325,7 @@ async fn main() -> anyhow::Result<()> {
         progress_total: 0,
         missing_blocks: 0,
     };
+    let mut backfill_started = false;
 
     let mut event_stream = EventStream::new();
 
@@ -292,27 +341,84 @@ async fn main() -> anyhow::Result<()> {
                 if !data.recent_block_versions.is_empty() {
                     signaling_data = data.clone();
                 }
-                // Auto-fetch stats for newly mined blocks
-                let new_tip = data.recent_blocks.first().map(|b| b.height).unwrap_or(0);
-                if new_tip > last_tip_height && last_tip_height > 0 {
-                    let new_blocks: Vec<(u64, String)> = data
-                        .recent_blocks
-                        .iter()
-                        .filter(|b| b.height > last_tip_height && !block_stats_cache.contains_key(&b.height))
-                        .map(|b| (b.height, b.hash.clone()))
-                        .collect();
-                    if !new_blocks.is_empty() {
-                        let c = stats_client.clone();
-                        let tx = stats_tx.clone();
-                        tokio::spawn(async move {
-                            if let Ok(stats) = c.fetch_block_stats(&new_blocks).await {
-                                let _ = tx.send(stats).await;
-                            }
-                        });
+                if data.error.is_some() {
+                    node_data.error = data.error;
+                } else if !data.recent_blocks.is_empty() {
+                    // Dashboard fetch — full data
+                    let new_tip = data.recent_blocks.first().map(|b| b.height).unwrap_or(0);
+
+                    if !backfill_started {
+                        // First dashboard data: load jsonl, seed cache + analytics,
+                        // then start unified backfill for recent blocks + analytics range
+                        backfill_started = true;
+                        let mut loaded = load_stats_from_file();
+                        let had_incomplete = loaded.iter().any(|s| s.total_vsize == 0);
+                        loaded.retain(|s| s.total_vsize > 0);
+                        if had_incomplete {
+                            rewrite_stats_file(&loaded);
+                        }
+                        for s in &loaded {
+                            block_stats_cache.insert(s.height, s.clone());
+                        }
+                        analytics.stats = loaded;
+                        analytics.stats.sort_by_key(|s| s.height);
+
+                        let cached: HashSet<u64> = block_stats_cache.keys().copied().collect();
+                        let start = new_tip.saturating_sub(4320);
+                        let analytics_heights: Vec<u64> = (start..=new_tip).rev().collect();
+                        let recent: Vec<(u64, String)> = data.recent_blocks
+                            .iter()
+                            .map(|b| (b.height, b.hash.clone()))
+                            .collect();
+
+                        backfill_stop.store(false, Ordering::Relaxed);
+                        let total = spawn_backfill(
+                            &client, &stats_tx, &backfill_stop,
+                            &recent, analytics_heights, &cached,
+                        );
+                        if total > 0 {
+                            analytics.state = AnalyticsState::Running;
+                            analytics.progress_current = 0;
+                            analytics.progress_total = total;
+                            let gaps = total;
+                            analytics.missing_blocks = gaps;
+                        } else {
+                            analytics.state = AnalyticsState::Done;
+                            analytics.missing_blocks = 0;
+                        }
+                    } else if new_tip > last_tip_height && last_tip_height > 0 {
+                        // New blocks mined — fetch their stats
+                        let new_blocks: Vec<(u64, String)> = data
+                            .recent_blocks
+                            .iter()
+                            .filter(|b| b.height > last_tip_height && !block_stats_cache.contains_key(&b.height))
+                            .map(|b| (b.height, b.hash.clone()))
+                            .collect();
+                        if !new_blocks.is_empty() {
+                            let c = client.clone();
+                            let tx = stats_tx.clone();
+                            tokio::spawn(async move {
+                                for (height, hash) in new_blocks {
+                                    if let Ok(stats) = c.fetch_block_stats(&[(height, hash)]).await {
+                                        for s in stats {
+                                            let _ = tx.send(s).await;
+                                        }
+                                    }
+                                }
+                            });
+                        }
                     }
+                    last_tip_height = new_tip;
+                    node_data = data;
+                } else if !data.known_addresses.is_empty() {
+                    // KnownPeers fetch — merge without clobbering dashboard fields
+                    node_data.blockchain = data.blockchain;
+                    node_data.network = data.network;
+                    node_data.uptime = data.uptime;
+                    node_data.fetched_at = data.fetched_at;
+                    node_data.known_peers = data.known_peers;
+                    node_data.known_addresses = data.known_addresses;
                 }
-                last_tip_height = new_tip;
-                node_data = data;
                 rpc_spinner = rpc_spinner.wrapping_add(1);
                 redraw = true;
             }
@@ -320,28 +426,22 @@ async fn main() -> anyhow::Result<()> {
                 rpc_spinner = rpc_spinner.wrapping_add(1);
                 redraw = true;
             }
-            Some(stats) = stats_rx.recv() => {
-                append_stats_to_file(&stats);
-                for s in stats {
-                    block_stats_cache.insert(s.height, s.clone());
-                    // Add to analytics history if loaded
-                    if analytics.state == AnalyticsState::Done {
-                        if !analytics.stats.iter().any(|e| e.height == s.height) {
-                            analytics.stats.push(s);
-                        }
+            Some(stat) = stats_rx.recv() => {
+                append_stats_to_file(&stat);
+                block_stats_cache.insert(stat.height, stat.clone());
+                // Add to analytics
+                if !analytics.stats.iter().any(|e| e.height == stat.height) {
+                    analytics.stats.push(stat);
+                }
+                if analytics.state == AnalyticsState::Running {
+                    analytics.progress_current += 1;
+                    analytics.missing_blocks = analytics.missing_blocks.saturating_sub(1);
+                    if analytics.progress_current >= analytics.progress_total {
+                        analytics.state = AnalyticsState::Done;
+                        analytics.stats.sort_by_key(|s| s.height);
                     }
                 }
                 rpc_spinner = rpc_spinner.wrapping_add(1);
-                redraw = true;
-            }
-            Some(stat) = analytics_rx.recv() => {
-                analytics.progress_current += 1;
-                analytics.stats.push(stat);
-                // Check if done
-                if analytics.progress_current >= analytics.progress_total {
-                    analytics.state = AnalyticsState::Done;
-                    analytics.stats.sort_by_key(|s| s.height);
-                }
                 redraw = true;
             }
             Some(Ok(event)) = event_stream.next() => {
@@ -374,7 +474,7 @@ async fn main() -> anyhow::Result<()> {
                                 KeyCode::Char('q') => break,
                                 KeyCode::Esc => {
                                     if screen == Screen::Analytics && analytics.state == AnalyticsState::Running {
-                                        analytics_stop.store(true, Ordering::Relaxed);
+                                        backfill_stop.store(true, Ordering::Relaxed);
                                         analytics.state = AnalyticsState::Done;
                                         analytics.stats.sort_by_key(|s| s.height);
                                     } else {
@@ -392,29 +492,7 @@ async fn main() -> anyhow::Result<()> {
                                     if screen == Screen::Signaling {
                                         signaling_notify.notify_one();
                                     }
-                                    if screen == Screen::Analytics {
-                                        // Load jsonl on tab entry so table shows existing data
-                                        if analytics.state != AnalyticsState::Running {
-                                            let mut loaded = load_stats_from_file();
-                                            loaded.retain(|s| s.total_vsize > 0);
-                                            loaded.sort_by_key(|s| s.height);
-                                            // Count gaps
-                                            let tip = node_data.blockchain.blocks;
-                                            let start = tip.saturating_sub(4320);
-                                            let loaded_heights: std::collections::HashSet<u64> =
-                                                loaded.iter().map(|s| s.height).collect();
-                                            let gaps = (start..=tip).filter(|h| !loaded_heights.contains(h)).count() as u64;
-                                            analytics.missing_blocks = gaps;
-                                            analytics.stats = loaded;
-                                            analytics.state = if analytics.stats.is_empty() && gaps > 0 {
-                                                AnalyticsState::Idle
-                                            } else if !analytics.stats.is_empty() {
-                                                AnalyticsState::Done
-                                            } else {
-                                                AnalyticsState::Idle
-                                            };
-                                        }
-                                    } else {
+                                    if screen != Screen::Analytics {
                                         poll_notify.notify_one();
                                     }
                                 }
@@ -470,82 +548,6 @@ async fn main() -> anyhow::Result<()> {
                                     } else if screen != Screen::Analytics {
                                         force_full_fetch.store(true, Ordering::Relaxed);
                                         poll_notify.notify_one();
-                                    }
-                                }
-                                KeyCode::Char('s') => {
-                                    if screen == Screen::Analytics && analytics.state != AnalyticsState::Running {
-                                        // Load existing data from jsonl
-                                        let mut existing = load_stats_from_file();
-                                        existing.sort_by_key(|s| s.height);
-
-                                        // Split into complete (has vsize data) and incomplete
-                                        let had_incomplete = existing.iter().any(|s| s.total_vsize == 0);
-                                        let complete_heights: std::collections::HashSet<u64> =
-                                            existing.iter()
-                                                .filter(|s| s.total_vsize > 0)
-                                                .map(|s| s.height)
-                                                .collect();
-                                        // Keep only complete entries; rewrite file to purge stale data
-                                        existing.retain(|s| s.total_vsize > 0);
-                                        if had_incomplete {
-                                            rewrite_stats_file(&existing);
-                                        }
-
-                                        // Determine range: go back 30 days (~4320 blocks) from tip
-                                        let tip = node_data.blockchain.blocks;
-                                        let start = tip.saturating_sub(4320);
-                                        let missing: Vec<u64> = (start..=tip)
-                                            .rev()
-                                            .filter(|h| !complete_heights.contains(h))
-                                            .collect();
-
-                                        analytics.stats = existing;
-                                        analytics.progress_current = 0;
-                                        analytics.progress_total = missing.len() as u64;
-
-                                        if missing.is_empty() {
-                                            analytics.state = AnalyticsState::Done;
-                                            analytics.stats.sort_by_key(|s| s.height);
-                                        } else {
-                                            analytics.state = AnalyticsState::Running;
-                                            analytics_stop.store(false, Ordering::Relaxed);
-                                            let c = client.clone();
-                                            let tx = analytics_tx.clone();
-                                            let stop = analytics_stop.clone();
-                                            tokio::spawn(async move {
-                                                for height in missing {
-                                                    if stop.load(Ordering::Relaxed) {
-                                                        break;
-                                                    }
-                                                    match c.fetch_block_stats_by_height(height).await {
-                                                        Ok(stat) => {
-                                                            append_stats_to_file(&[stat.clone()]);
-                                                            let _ = tx.send(stat).await;
-                                                        }
-                                                        Err(_) => {} // skip failed blocks
-                                                    }
-                                                }
-                                            });
-                                        }
-                                    }
-                                }
-                                KeyCode::Char('d') => {
-                                    if screen == Screen::Dashboard {
-                                        let blocks: Vec<(u64, String)> = node_data
-                                            .recent_blocks
-                                            .iter()
-                                            .filter(|b| b.height > 0 && !block_stats_cache.contains_key(&b.height))
-                                            .map(|b| (b.height, b.hash.clone()))
-                                            .collect();
-                                        if !blocks.is_empty() {
-                                            let c = stats_client.clone();
-                                            let tx = stats_tx.clone();
-                                            tokio::spawn(async move {
-                                                if let Ok(stats) = c.fetch_block_stats(&blocks).await {
-                                                    let _ = tx.send(stats).await;
-                                                }
-                                            });
-                                        }
                                     }
                                 }
                                 _ => {}

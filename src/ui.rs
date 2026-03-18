@@ -1474,17 +1474,15 @@ fn draw_analytics(f: &mut Frame, area: Rect, analytics: &AnalyticsData) {
                 .border_type(BorderType::Rounded)
                 .title(" Analytics ")
                 .style(Style::default().fg(Color::Cyan));
-            let msg = if analytics.missing_blocks > 0 {
-                format!("Press 's' to analyze {} missing blocks (~30 day window)", analytics.missing_blocks)
-            } else {
-                "Press 's' to start analysis (~30 days, ~4320 blocks)".to_string()
-            };
             let text = Paragraph::new(vec![
                 Line::from(""),
-                Line::from(Span::styled(msg, Style::default().fg(Color::White))),
+                Line::from(Span::styled(
+                    "Waiting for dashboard data...",
+                    Style::default().fg(Color::White),
+                )),
                 Line::from(""),
                 Line::from(Span::styled(
-                    "Daily breakdown of transaction types by count and block size.",
+                    "Block analysis starts automatically after first dashboard fetch.",
                     Style::default().fg(Color::DarkGray),
                 )),
                 Line::from(Span::styled(
@@ -1724,7 +1722,7 @@ fn draw_footer(f: &mut Frame, area: Rect, screen: Screen, rpc_spinner: u8) {
         Screen::Dashboard => " q: quit | Tab: switch screen | j/k: switch table | ↑/↓: navigate | r: refresh ",
         Screen::KnownPeers => " q: quit | Tab: signaling | ↑/↓: scroll services | r: refresh ",
         Screen::Signaling => " q: quit | Tab: analytics | ↑/↓: select bit | Enter: details | r: refresh ",
-        Screen::Analytics => " q: quit | Tab: dashboard | s: start analysis | Esc: stop ",
+        Screen::Analytics => " q: quit | Tab: dashboard | Esc: stop analysis ",
     };
 
     const SPINNER: &[&str] = &[".  ", ".. ", "...", " ..", "  .", "   "];
