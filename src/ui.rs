@@ -1668,7 +1668,7 @@ fn analytics_header_row() -> Row<'static> {
     let hdr = Style::default().fg(Color::Cyan).bold();
     let hdr_detail = Style::default().fg(Color::LightMagenta).bold();
     Row::new(vec![
-        Cell::from("Date").style(hdr),
+        Cell::from("").style(hdr),
         Cell::from("Blks").style(hdr),
         Cell::from("TXs").style(hdr),
         Cell::from("Fin%").style(hdr),
