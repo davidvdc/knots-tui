@@ -358,9 +358,12 @@ async fn main() -> anyhow::Result<()> {
                     // Dashboard fetch — full data
                     let new_tip = data.recent_blocks.first().map(|b| b.height).unwrap_or(0);
 
-                    if !backfill_started {
-                        // First dashboard data: load jsonl, seed cache + analytics,
-                        // then start unified backfill for recent blocks + analytics range
+                    let is_ibd = data.blockchain.initialblockdownload;
+
+                    if !backfill_started && !is_ibd {
+                        // First dashboard data after sync: load jsonl, seed cache + analytics,
+                        // then start unified backfill for recent blocks + analytics range.
+                        // During IBD this is skipped; triggers once IBD completes.
                         backfill_started = true;
                         let mut loaded = load_stats_from_file();
                         let had_incomplete = loaded.iter().any(|s| s.total_vsize == 0 || !s.bip110_checked);
@@ -398,7 +401,7 @@ async fn main() -> anyhow::Result<()> {
                             analytics.missing_blocks = 0;
                         }
 
-                    } else if new_tip > last_tip_height && last_tip_height > 0 {
+                    } else if new_tip > last_tip_height && last_tip_height > 0 && !is_ibd {
                         // New blocks mined — fetch their stats
                         let new_blocks: Vec<(u64, String)> = data
                             .recent_blocks
@@ -544,10 +547,12 @@ async fn main() -> anyhow::Result<()> {
                                     }
                                 }
                                 KeyCode::Tab => {
+                                    let in_ibd = node_data.blockchain.initialblockdownload;
                                     screen = match screen {
                                         Screen::Dashboard => Screen::KnownPeers,
                                         Screen::KnownPeers => Screen::Signaling,
-                                        Screen::Signaling => Screen::Analytics,
+                                        // Skip Analytics during IBD
+                                        Screen::Signaling => if in_ibd { Screen::Dashboard } else { Screen::Analytics },
                                         Screen::Analytics => Screen::Dashboard,
                                     };
                                     current_screen.store(screen as u8, Ordering::Relaxed);
@@ -640,7 +645,7 @@ async fn main() -> anyhow::Result<()> {
                                     }
                                 }
                                 KeyCode::Char('+') | KeyCode::Char('=') => {
-                                    if screen == Screen::Analytics && analytics.state != AnalyticsState::Running {
+                                    if screen == Screen::Analytics && analytics.state != AnalyticsState::Running && !node_data.blockchain.initialblockdownload {
                                         // Extend analytics by another 30 days (~4320 blocks)
                                         // and resume any gaps from a previous Esc stop
                                         analytics.depth += 4320;
