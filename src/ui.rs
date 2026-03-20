@@ -696,13 +696,8 @@ fn draw_blocks_table(f: &mut Frame, area: Rect, data: &NodeData, block_stats: &H
         Constraint::Min(4),
     ];
 
-    let has_any = data.recent_blocks.iter().any(|b| block_stats.contains_key(&b.height));
     let total = data.recent_blocks.len();
-    let title = if has_any {
-        format!(" Recent Blocks ({}-{}/{}) [Enter: detail | d: load missing] ", scroll + 1, (scroll + 8).min(total), total)
-    } else {
-        format!(" Recent Blocks ({}-{}/{}) [d: load details] ", scroll + 1, (scroll + 8).min(total), total)
-    };
+    let title = format!(" Recent Blocks ({}-{}/{}) [Enter: detail] ", scroll + 1, (scroll + 8).min(total), total);
     let border_color = if focused { Color::Yellow } else { Color::default() };
 
     let table = Table::new(rows, widths)
