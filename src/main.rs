@@ -313,7 +313,8 @@ async fn main() -> anyhow::Result<()> {
     let mut block_stats_cache: HashMap<u64, BlockStats> = HashMap::new();
     let mut last_tip_height: u64 = 0;
     let mut peer_scroll: u16 = 0;
-    let mut selected_block: u8 = 0;
+    let mut selected_block: u16 = 0;
+    let mut block_scroll: u16 = 0;
     let mut show_block_modal = false;
     let mut blocks_focused = true; // true = blocks table, false = peers table
     let mut screen = Screen::Dashboard;
@@ -337,7 +338,7 @@ async fn main() -> anyhow::Result<()> {
     let mut event_stream = EventStream::new();
 
     // Initial render
-    terminal.draw(|f| ui::draw(f, &node_data, peer_scroll, screen, selected_bit, show_bit_modal, rpc_spinner, &block_stats_cache, selected_block, show_block_modal, blocks_focused, &analytics))?;
+    terminal.draw(|f| ui::draw(f, &node_data, peer_scroll, screen, selected_bit, show_bit_modal, rpc_spinner, &block_stats_cache, selected_block, block_scroll, show_block_modal, blocks_focused, &analytics))?;
 
     loop {
         let mut redraw = false;
@@ -477,11 +478,17 @@ async fn main() -> anyhow::Result<()> {
                                     show_block_modal = false;
                                 }
                                 KeyCode::Down => {
-                                    let max = node_data.recent_blocks.len().saturating_sub(1) as u8;
+                                    let max = node_data.recent_blocks.len().saturating_sub(1) as u16;
                                     selected_block = (selected_block + 1).min(max);
+                                    if selected_block >= block_scroll + 8 {
+                                        block_scroll = selected_block - 7;
+                                    }
                                 }
                                 KeyCode::Up => {
                                     selected_block = selected_block.saturating_sub(1);
+                                    if selected_block < block_scroll {
+                                        block_scroll = selected_block;
+                                    }
                                 }
                                 _ => {}
                             }
@@ -519,8 +526,11 @@ async fn main() -> anyhow::Result<()> {
                                         analytics.scroll = analytics.scroll.saturating_add(1);
                                     } else if screen == Screen::Dashboard {
                                         if blocks_focused {
-                                            let max = node_data.recent_blocks.len().saturating_sub(1) as u8;
+                                            let max = node_data.recent_blocks.len().saturating_sub(1) as u16;
                                             selected_block = (selected_block + 1).min(max);
+                                            if selected_block >= block_scroll + 8 {
+                                                block_scroll = selected_block - 7;
+                                            }
                                         } else {
                                             peer_scroll = peer_scroll.saturating_add(1);
                                         }
@@ -536,6 +546,9 @@ async fn main() -> anyhow::Result<()> {
                                     } else if screen == Screen::Dashboard {
                                         if blocks_focused {
                                             selected_block = selected_block.saturating_sub(1);
+                                            if selected_block < block_scroll {
+                                                block_scroll = selected_block;
+                                            }
                                         } else {
                                             peer_scroll = peer_scroll.saturating_sub(1);
                                         }
@@ -552,7 +565,7 @@ async fn main() -> anyhow::Result<()> {
                                     if screen == Screen::Signaling {
                                         show_bit_modal = true;
                                     } else if screen == Screen::Dashboard {
-                                        let max = node_data.recent_blocks.len().saturating_sub(1) as u8;
+                                        let max = node_data.recent_blocks.len().saturating_sub(1) as u16;
                                         if selected_block <= max {
                                             if let Some(b) = node_data.recent_blocks.get(selected_block as usize) {
                                                 if block_stats_cache.contains_key(&b.height) {
@@ -608,7 +621,7 @@ async fn main() -> anyhow::Result<()> {
             } else {
                 &node_data
             };
-            terminal.draw(|f| ui::draw(f, draw_data, peer_scroll, screen, selected_bit, show_bit_modal, rpc_spinner, &block_stats_cache, selected_block, show_block_modal, blocks_focused, &analytics))?;
+            terminal.draw(|f| ui::draw(f, draw_data, peer_scroll, screen, selected_bit, show_bit_modal, rpc_spinner, &block_stats_cache, selected_block, block_scroll, show_block_modal, blocks_focused, &analytics))?;
         }
     }
 

@@ -684,15 +684,32 @@ impl RpcClient {
             .map(|a| a.len() as u64)
             .unwrap_or(0);
 
-        // Fetch recent blocks (last 8)
+        // Fetch recent blocks (last 50) using batched RPC calls
         let mut recent_blocks = Vec::new();
-        let mut block_hash = blockchain.bestblockhash.clone();
-        for _ in 0..8 {
-            if block_hash.is_empty() {
-                break;
-            }
-            let block_val = self.call("getblock", json!([block_hash])).await?;
-            let height = block_val["height"].as_u64().unwrap_or(0);
+        let tip = blockchain.blocks;
+        let num_blocks = 50u64.min(tip + 1);
+        let heights: Vec<u64> = (0..num_blocks).map(|i| tip - i).collect();
+
+        // Batch getblockhash for all heights
+        let hash_calls: Vec<(&str, Value)> = heights
+            .iter()
+            .map(|&h| ("getblockhash", json!([h])))
+            .collect();
+        let hash_results = self.batch_call(&hash_calls).await?;
+        let hashes: Vec<String> = hash_results
+            .iter()
+            .map(|v| v.as_str().unwrap_or("").to_string())
+            .collect();
+
+        // Batch getblock for all hashes (verbosity 1 = JSON without raw tx)
+        let block_calls: Vec<(&str, Value)> = hashes
+            .iter()
+            .map(|h| ("getblock", json!([h, 1])))
+            .collect();
+        let block_results = self.batch_call(&block_calls).await?;
+
+        for (i, block_val) in block_results.iter().enumerate() {
+            let height = block_val["height"].as_u64().unwrap_or(heights[i]);
             let size = block_val["size"].as_u64().unwrap_or(0);
             let weight = block_val["weight"].as_u64().unwrap_or(0);
             let tx_count = block_val["nTx"].as_u64().unwrap_or(
@@ -700,21 +717,16 @@ impl RpcClient {
             ) as usize;
             let time = block_val["time"].as_u64().unwrap_or(0);
             let version = block_val["version"].as_i64().unwrap_or(0);
-            let prev = block_val["previousblockhash"]
-                .as_str()
-                .unwrap_or("")
-                .to_string();
 
             recent_blocks.push(BlockInfo {
                 height,
-                hash: block_hash,
+                hash: hashes[i].clone(),
                 size,
                 weight,
                 tx_count,
                 time,
                 version,
             });
-            block_hash = prev;
         }
 
         Ok(NodeData {

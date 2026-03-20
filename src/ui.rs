@@ -3,7 +3,7 @@ use crate::{AnalyticsData, AnalyticsState, Screen};
 use ratatui::{prelude::*, widgets::*};
 use std::collections::{BTreeMap, HashMap};
 
-pub fn draw(f: &mut Frame, data: &NodeData, peer_scroll: u16, screen: Screen, selected_bit: u8, show_bit_modal: bool, rpc_spinner: u8, block_stats: &HashMap<u64, BlockStats>, selected_block: u8, show_block_modal: bool, blocks_focused: bool, analytics: &AnalyticsData) {
+pub fn draw(f: &mut Frame, data: &NodeData, peer_scroll: u16, screen: Screen, selected_bit: u8, show_bit_modal: bool, rpc_spinner: u8, block_stats: &HashMap<u64, BlockStats>, selected_block: u16, block_scroll: u16, show_block_modal: bool, blocks_focused: bool, analytics: &AnalyticsData) {
     let area = f.area();
 
     let outer = Layout::default()
@@ -17,7 +17,7 @@ pub fn draw(f: &mut Frame, data: &NodeData, peer_scroll: u16, screen: Screen, se
 
     draw_header(f, outer[0], data, screen);
     match screen {
-        Screen::Dashboard => draw_body(f, outer[1], data, peer_scroll, block_stats, selected_block, blocks_focused, analytics),
+        Screen::Dashboard => draw_body(f, outer[1], data, peer_scroll, block_stats, selected_block, block_scroll, blocks_focused, analytics),
         Screen::KnownPeers => draw_known_peers(f, outer[1], data, peer_scroll),
         Screen::Signaling => draw_signaling(f, outer[1], data, selected_bit),
         Screen::Analytics => draw_analytics(f, outer[1], analytics),
@@ -175,7 +175,7 @@ fn draw_ibd_screen(f: &mut Frame, area: Rect, data: &NodeData, peer_scroll: u16)
     draw_peers_table(f, rows[1], data, peer_scroll, false);
 }
 
-fn draw_body(f: &mut Frame, area: Rect, data: &NodeData, peer_scroll: u16, block_stats: &HashMap<u64, BlockStats>, selected_block: u8, blocks_focused: bool, analytics: &AnalyticsData) {
+fn draw_body(f: &mut Frame, area: Rect, data: &NodeData, peer_scroll: u16, block_stats: &HashMap<u64, BlockStats>, selected_block: u16, block_scroll: u16, blocks_focused: bool, analytics: &AnalyticsData) {
     if let Some(ref err) = data.error {
         let err_block = Block::default()
             .borders(Borders::ALL)
@@ -230,7 +230,7 @@ fn draw_body(f: &mut Frame, area: Rect, data: &NodeData, peer_scroll: u16, block
         ])
         .split(rows[1]);
 
-    draw_blocks_table(f, bottom_rows[0], data, block_stats, selected_block, blocks_focused);
+    draw_blocks_table(f, bottom_rows[0], data, block_stats, selected_block, block_scroll, blocks_focused);
     draw_analytics_summary(f, bottom_rows[1], analytics);
     draw_peers_table(f, bottom_rows[2], data, peer_scroll, !blocks_focused);
 }
@@ -621,18 +621,24 @@ fn draw_peers_table(f: &mut Frame, area: Rect, data: &NodeData, scroll: u16, foc
     f.render_stateful_widget(table, area, &mut state);
 }
 
-fn draw_blocks_table(f: &mut Frame, area: Rect, data: &NodeData, block_stats: &HashMap<u64, BlockStats>, selected_block: u8, focused: bool) {
+fn draw_blocks_table(f: &mut Frame, area: Rect, data: &NodeData, block_stats: &HashMap<u64, BlockStats>, selected_block: u16, block_scroll: u16, focused: bool) {
     let header = Row::new(vec![" ", "Height", "TXs", "Size", "Weight", "Age", "BIP110", "BTC Out", "Fees", "Fin%", ">83B"])
         .style(Style::default().fg(Color::Cyan).bold())
         .bottom_margin(0);
 
     let now = chrono::Utc::now().timestamp() as u64;
-
-    let rows: Vec<Row> = data
+    let scroll = block_scroll as usize;
+    let visible_blocks: Vec<(usize, &BlockInfo)> = data
         .recent_blocks
         .iter()
         .enumerate()
-        .map(|(i, b)| {
+        .skip(scroll)
+        .take(8)
+        .collect();
+
+    let rows: Vec<Row> = visible_blocks
+        .iter()
+        .map(|&(i, b)| {
             let age = if b.time > 0 && now > b.time {
                 format_duration(now - b.time)
             } else {
@@ -691,10 +697,11 @@ fn draw_blocks_table(f: &mut Frame, area: Rect, data: &NodeData, block_stats: &H
     ];
 
     let has_any = data.recent_blocks.iter().any(|b| block_stats.contains_key(&b.height));
+    let total = data.recent_blocks.len();
     let title = if has_any {
-        " Recent Blocks [Enter: detail | d: load missing] "
+        format!(" Recent Blocks ({}-{}/{}) [Enter: detail | d: load missing] ", scroll + 1, (scroll + 8).min(total), total)
     } else {
-        " Recent Blocks [d: load details] "
+        format!(" Recent Blocks ({}-{}/{}) [d: load details] ", scroll + 1, (scroll + 8).min(total), total)
     };
     let border_color = if focused { Color::Yellow } else { Color::default() };
 
