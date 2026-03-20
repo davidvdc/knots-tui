@@ -1,4 +1,5 @@
 mod rpc;
+mod sys;
 mod ui;
 
 use clap::Parser;
@@ -17,6 +18,7 @@ use std::time::Duration;
 use tokio::sync::{mpsc, Notify};
 
 use rpc::{BlockStats, NodeData, RpcClient};
+use sys::SystemStats;
 
 fn stats_file_path() -> std::path::PathBuf {
     let dir = shellexpand::tilde("~/.knots-tui").to_string();
@@ -299,6 +301,19 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
+    // System stats sampler (CPU, memory, disk I/O from /proc)
+    let (sys_tx, mut sys_rx) = mpsc::channel::<SystemStats>(2);
+    tokio::spawn(async move {
+        let mut sampler = sys::SystemSampler::new();
+        let mut interval = tokio::time::interval(Duration::from_secs(2));
+        interval.tick().await; // first tick is immediate
+        loop {
+            interval.tick().await;
+            let stats = sampler.sample();
+            let _ = sys_tx.send(stats).await;
+        }
+    });
+
     enable_raw_mode()?;
     stdout().execute(EnterAlternateScreen)?;
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
@@ -333,6 +348,7 @@ async fn main() -> anyhow::Result<()> {
         scroll: 0,
         depth: 4320,
     };
+    let mut system_stats = SystemStats::default();
     let mut backfill_started = false;
     let mut prev_ibd_height: u64 = 0;
     let mut prev_ibd_bytes_recv: u64 = 0;
@@ -341,7 +357,7 @@ async fn main() -> anyhow::Result<()> {
     let mut event_stream = EventStream::new();
 
     // Initial render
-    terminal.draw(|f| ui::draw(f, &node_data, peer_scroll, screen, selected_bit, show_bit_modal, rpc_spinner, &block_stats_cache, selected_block, block_scroll, show_block_modal, blocks_focused, &analytics))?;
+    terminal.draw(|f| ui::draw(f, &node_data, peer_scroll, screen, selected_bit, show_bit_modal, rpc_spinner, &block_stats_cache, selected_block, block_scroll, show_block_modal, blocks_focused, &analytics, &system_stats))?;
 
     loop {
         let mut redraw = false;
@@ -485,6 +501,12 @@ async fn main() -> anyhow::Result<()> {
                     }
                 }
                 redraw = true;
+            }
+            Some(sys) = sys_rx.recv() => {
+                system_stats = sys;
+                if node_data.blockchain.initialblockdownload {
+                    redraw = true;
+                }
             }
             Some(Ok(event)) = event_stream.next() => {
                 if let Event::Key(key) = event {
@@ -682,7 +704,7 @@ async fn main() -> anyhow::Result<()> {
             } else {
                 &node_data
             };
-            terminal.draw(|f| ui::draw(f, draw_data, peer_scroll, screen, selected_bit, show_bit_modal, rpc_spinner, &block_stats_cache, selected_block, block_scroll, show_block_modal, blocks_focused, &analytics))?;
+            terminal.draw(|f| ui::draw(f, draw_data, peer_scroll, screen, selected_bit, show_bit_modal, rpc_spinner, &block_stats_cache, selected_block, block_scroll, show_block_modal, blocks_focused, &analytics, &system_stats))?;
         }
     }
 

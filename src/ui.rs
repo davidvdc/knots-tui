@@ -1,9 +1,10 @@
 use crate::rpc::{BlockInfo, BlockStats, NodeData};
+use crate::sys::SystemStats;
 use crate::{AnalyticsData, AnalyticsState, Screen};
 use ratatui::{prelude::*, widgets::*};
 use std::collections::{BTreeMap, HashMap};
 
-pub fn draw(f: &mut Frame, data: &NodeData, peer_scroll: u16, screen: Screen, selected_bit: u8, show_bit_modal: bool, rpc_spinner: u8, block_stats: &HashMap<u64, BlockStats>, selected_block: u16, block_scroll: u16, show_block_modal: bool, blocks_focused: bool, analytics: &AnalyticsData) {
+pub fn draw(f: &mut Frame, data: &NodeData, peer_scroll: u16, screen: Screen, selected_bit: u8, show_bit_modal: bool, rpc_spinner: u8, block_stats: &HashMap<u64, BlockStats>, selected_block: u16, block_scroll: u16, show_block_modal: bool, blocks_focused: bool, analytics: &AnalyticsData, system_stats: &SystemStats) {
     let area = f.area();
 
     let outer = Layout::default()
@@ -17,7 +18,7 @@ pub fn draw(f: &mut Frame, data: &NodeData, peer_scroll: u16, screen: Screen, se
 
     draw_header(f, outer[0], data, screen);
     match screen {
-        Screen::Dashboard => draw_body(f, outer[1], data, peer_scroll, block_stats, selected_block, block_scroll, blocks_focused, analytics),
+        Screen::Dashboard => draw_body(f, outer[1], data, peer_scroll, block_stats, selected_block, block_scroll, blocks_focused, analytics, system_stats),
         Screen::KnownPeers => draw_known_peers(f, outer[1], data, peer_scroll),
         Screen::Signaling => draw_signaling(f, outer[1], data, selected_bit),
         Screen::Analytics => draw_analytics(f, outer[1], analytics),
@@ -76,7 +77,7 @@ fn draw_header(f: &mut Frame, area: Rect, data: &NodeData, screen: Screen) {
     f.render_widget(header, area);
 }
 
-fn draw_ibd_screen(f: &mut Frame, area: Rect, data: &NodeData, peer_scroll: u16) {
+fn draw_ibd_screen(f: &mut Frame, area: Rect, data: &NodeData, peer_scroll: u16, sys: &SystemStats) {
     let bc = &data.blockchain;
     let net = &data.network;
     let progress = (bc.verificationprogress * 100.0).min(100.0);
@@ -86,7 +87,6 @@ fn draw_ibd_screen(f: &mut Frame, area: Rect, data: &NodeData, peer_scroll: u16)
     let filled = ((bc.verificationprogress * bar_width as f64) as usize).min(bar_width);
     let bar = format!("[{}{}]", "#".repeat(filled), " ".repeat(bar_width - filled));
 
-    // ETA
     let remaining_blocks = bc.headers.saturating_sub(bc.blocks);
     let eta = if data.ibd_blocks_per_sec > 0.1 {
         let secs = (remaining_blocks as f64 / data.ibd_blocks_per_sec) as u64;
@@ -94,15 +94,11 @@ fn draw_ibd_screen(f: &mut Frame, area: Rect, data: &NodeData, peer_scroll: u16)
     } else {
         "-".to_string()
     };
-
-    // Speed
     let speed = if data.ibd_blocks_per_sec > 0.1 {
         format!("{:.1} blk/s", data.ibd_blocks_per_sec)
     } else {
         "-".to_string()
     };
-
-    // Download rate
     let dl_rate = if data.ibd_recv_per_sec > 0 {
         format!("{}/s", format_bytes(data.ibd_recv_per_sec))
     } else {
@@ -161,17 +157,27 @@ fn draw_ibd_screen(f: &mut Frame, area: Rect, data: &NodeData, peer_scroll: u16)
             Span::styled("   Difficulty: ", gray),
             Span::styled(format!("{:.2e}", bc.difficulty), white),
         ]),
-        Line::from(vec![
-            Span::styled("Version:  ", gray),
-            Span::styled(net.subversion.clone(), Style::default().fg(Color::DarkGray)),
-        ]),
     ];
+
+    // System stats box height
+    let has_sys = !sys.cpus.is_empty() || sys.mem.total > 0;
+    let cpu_lines = (sys.cpus.len() + 1) / 2;
+    let has_swap = sys.mem.swap_total > 0;
+    let disk_lines = sys.disks.len().min(8);
+    let mem_lines = if sys.mem.total > 0 { 1 } else { 0 };
+    let swap_lines = if has_swap { 1 } else { 0 };
+    let sys_height = if has_sys {
+        (cpu_lines + mem_lines + swap_lines + disk_lines + 2) as u16
+    } else {
+        0
+    };
 
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(9), // IBD info box
-            Constraint::Min(8),    // peers table
+            Constraint::Length(8),          // IBD info (6 lines + 2 border)
+            Constraint::Length(sys_height), // System stats (0 if unavailable)
+            Constraint::Min(5),            // peers table
         ])
         .split(area);
 
@@ -183,10 +189,153 @@ fn draw_ibd_screen(f: &mut Frame, area: Rect, data: &NodeData, peer_scroll: u16)
     let paragraph = Paragraph::new(lines).block(block);
     f.render_widget(paragraph, rows[0]);
 
-    draw_peers_table(f, rows[1], data, peer_scroll, false);
+    if has_sys {
+        draw_system_box(f, rows[1], sys);
+    }
+
+    draw_peers_table(f, rows[2], data, peer_scroll, false);
 }
 
-fn draw_body(f: &mut Frame, area: Rect, data: &NodeData, peer_scroll: u16, block_stats: &HashMap<u64, BlockStats>, selected_block: u16, block_scroll: u16, blocks_focused: bool, analytics: &AnalyticsData) {
+fn draw_system_box(f: &mut Frame, area: Rect, sys: &SystemStats) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .title(" System ")
+        .title_style(Style::default().fg(Color::Cyan).bold());
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let available_w = inner.width as usize;
+    let mut lines: Vec<Line> = Vec::new();
+
+    // CPU bars: 2 per row
+    // Each bar: "{label}[{bar_content}]" where label is 2-char right-aligned core number
+    // Two bars per line: " LL[...] LL[...]"
+    // Per bar overhead: space(1) + label(2) + '[' + ']' = 5
+    // Two bars: 5 + inner + 1 + 5 + inner = 11 + 2*inner
+    let bar_inner = if available_w > 11 {
+        (available_w - 11) / 2
+    } else {
+        10
+    };
+
+    for pair in sys.cpus.chunks(2) {
+        let mut spans: Vec<Span> = Vec::new();
+        for (i_in_pair, cpu) in pair.iter().enumerate() {
+            let core_idx = lines.len() * 2 + i_in_pair;
+            let total_pct = (cpu.nice_pct + cpu.user_pct + cpu.system_pct + cpu.iowait_pct).min(100.0);
+            let pct_text = format!("{:3.0}%", total_pct);
+            let pct_len = pct_text.len();
+            let bar_area = bar_inner.saturating_sub(pct_len);
+
+            // Compute char counts using cumulative rounding
+            let nice_end = (cpu.nice_pct / 100.0 * bar_area as f32).round() as usize;
+            let user_end = ((cpu.nice_pct + cpu.user_pct) / 100.0 * bar_area as f32).round() as usize;
+            let sys_end = ((cpu.nice_pct + cpu.user_pct + cpu.system_pct) / 100.0 * bar_area as f32).round() as usize;
+            let iow_end = (total_pct / 100.0 * bar_area as f32).round() as usize;
+
+            let nice_c = nice_end.min(bar_area);
+            let user_c = user_end.min(bar_area).saturating_sub(nice_c);
+            let sys_c = sys_end.min(bar_area).saturating_sub(nice_c + user_c);
+            let iow_c = iow_end.min(bar_area).saturating_sub(nice_c + user_c + sys_c);
+            let empty_c = bar_area.saturating_sub(nice_c + user_c + sys_c + iow_c);
+
+            if i_in_pair > 0 {
+                spans.push(Span::raw(" "));
+            }
+            spans.push(Span::styled(format!("{:>2}", core_idx), Style::default().fg(Color::Cyan)));
+            spans.push(Span::styled("[", Style::default().fg(Color::DarkGray)));
+            if nice_c > 0 {
+                spans.push(Span::styled("|".repeat(nice_c), Style::default().fg(Color::Blue)));
+            }
+            if user_c > 0 {
+                spans.push(Span::styled("|".repeat(user_c), Style::default().fg(Color::Green)));
+            }
+            if sys_c > 0 {
+                spans.push(Span::styled("|".repeat(sys_c), Style::default().fg(Color::Red)));
+            }
+            if iow_c > 0 {
+                spans.push(Span::styled("|".repeat(iow_c), Style::default().fg(Color::DarkGray)));
+            }
+            spans.push(Span::raw(" ".repeat(empty_c)));
+            spans.push(Span::styled(pct_text, Style::default().fg(Color::White)));
+            spans.push(Span::styled("]", Style::default().fg(Color::DarkGray)));
+        }
+        lines.push(Line::from(spans));
+    }
+
+    // Memory bar
+    if sys.mem.total > 0 {
+        let label = "Mem";
+        let info = format!("{}/{}", format_bytes_short(sys.mem.used + sys.mem.buffers + sys.mem.cached), format_bytes_short(sys.mem.total));
+        let overhead = label.len() + 1 + 1 + info.len(); // "Mem" + "[" + "]" + info
+        let bar_area = available_w.saturating_sub(overhead + 1); // +1 for leading space
+
+        let used_c = if sys.mem.total > 0 { (sys.mem.used as f64 / sys.mem.total as f64 * bar_area as f64).round() as usize } else { 0 };
+        let buf_c = if sys.mem.total > 0 { (sys.mem.buffers as f64 / sys.mem.total as f64 * bar_area as f64).round() as usize } else { 0 };
+        let cache_c = if sys.mem.total > 0 { (sys.mem.cached as f64 / sys.mem.total as f64 * bar_area as f64).round() as usize } else { 0 };
+        let filled = (used_c + buf_c + cache_c).min(bar_area);
+        let empty = bar_area.saturating_sub(filled);
+
+        let mut spans = vec![
+            Span::styled(format!(" {}", label), Style::default().fg(Color::Cyan)),
+            Span::styled("[", Style::default().fg(Color::DarkGray)),
+        ];
+        if used_c > 0 {
+            spans.push(Span::styled("|".repeat(used_c), Style::default().fg(Color::Green)));
+        }
+        if buf_c > 0 {
+            spans.push(Span::styled("|".repeat(buf_c), Style::default().fg(Color::Blue)));
+        }
+        if cache_c > 0 {
+            spans.push(Span::styled("|".repeat(cache_c), Style::default().fg(Color::Yellow)));
+        }
+        spans.push(Span::raw(" ".repeat(empty)));
+        spans.push(Span::styled(info, Style::default().fg(Color::White)));
+        spans.push(Span::styled("]", Style::default().fg(Color::DarkGray)));
+        lines.push(Line::from(spans));
+    }
+
+    // Swap bar
+    if sys.mem.swap_total > 0 {
+        let label = "Swp";
+        let info = format!("{}/{}", format_bytes_short(sys.mem.swap_used), format_bytes_short(sys.mem.swap_total));
+        let overhead = label.len() + 1 + 1 + info.len();
+        let bar_area = available_w.saturating_sub(overhead + 1);
+
+        let used_c = if sys.mem.swap_total > 0 { (sys.mem.swap_used as f64 / sys.mem.swap_total as f64 * bar_area as f64).round() as usize } else { 0 };
+        let empty = bar_area.saturating_sub(used_c);
+
+        let mut spans = vec![
+            Span::styled(format!(" {}", label), Style::default().fg(Color::Cyan)),
+            Span::styled("[", Style::default().fg(Color::DarkGray)),
+        ];
+        if used_c > 0 {
+            spans.push(Span::styled("|".repeat(used_c), Style::default().fg(Color::Red)));
+        }
+        spans.push(Span::raw(" ".repeat(empty)));
+        spans.push(Span::styled(info, Style::default().fg(Color::White)));
+        spans.push(Span::styled("]", Style::default().fg(Color::DarkGray)));
+        lines.push(Line::from(spans));
+    }
+
+    // Disk I/O per device
+    for disk in sys.disks.iter().take(8) {
+        let spans = vec![
+            Span::styled(format!(" {:>8}", disk.name), Style::default().fg(Color::Cyan)),
+            Span::styled("  R ", Style::default().fg(Color::DarkGray)),
+            Span::styled(format!("{:>9}/s", format_bytes_short(disk.read_per_sec)), Style::default().fg(Color::Green)),
+            Span::styled("  W ", Style::default().fg(Color::DarkGray)),
+            Span::styled(format!("{:>9}/s", format_bytes_short(disk.write_per_sec)), Style::default().fg(Color::Yellow)),
+        ];
+        lines.push(Line::from(spans));
+    }
+
+    let paragraph = Paragraph::new(lines);
+    f.render_widget(paragraph, inner);
+}
+
+fn draw_body(f: &mut Frame, area: Rect, data: &NodeData, peer_scroll: u16, block_stats: &HashMap<u64, BlockStats>, selected_block: u16, block_scroll: u16, blocks_focused: bool, analytics: &AnalyticsData, system_stats: &SystemStats) {
     if let Some(ref err) = data.error {
         let err_block = Block::default()
             .borders(Borders::ALL)
@@ -202,7 +351,7 @@ fn draw_body(f: &mut Frame, area: Rect, data: &NodeData, peer_scroll: u16, block
     }
 
     if data.blockchain.initialblockdownload {
-        draw_ibd_screen(f, area, data, peer_scroll);
+        draw_ibd_screen(f, area, data, peer_scroll, system_stats);
         return;
     }
 
