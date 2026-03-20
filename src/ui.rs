@@ -622,7 +622,7 @@ fn draw_peers_table(f: &mut Frame, area: Rect, data: &NodeData, scroll: u16, foc
 }
 
 fn draw_blocks_table(f: &mut Frame, area: Rect, data: &NodeData, block_stats: &HashMap<u64, BlockStats>, selected_block: u16, block_scroll: u16, focused: bool) {
-    let header = Row::new(vec![" ", "Height", "Time", "TXs", "Size", "Weight", "Age", "BIP110", "BTC Out", "Fees", "Fin%", ">83B"])
+    let header = Row::new(vec![" ", "Height", "Time", "TXs", "Size", "Weight", "Age", "BIP110", "BTC Out", "Fees", "Fin%", "110%"])
         .style(Style::default().fg(Color::Cyan).bold())
         .bottom_margin(0);
 
@@ -652,7 +652,7 @@ fn draw_blocks_table(f: &mut Frame, area: Rect, data: &NodeData, block_stats: &H
             let bip110_color = if bip110 == "yes" { Color::Green } else { Color::DarkGray };
             let marker = if focused && i == selected_block as usize { ">" } else { " " };
 
-            let (btc_out, fees, financial, fin_color, oversized, os_color) = if let Some(s) = block_stats.get(&b.height) {
+            let (btc_out, fees, financial, fin_color, bip110_str, bip110_color) = if let Some(s) = block_stats.get(&b.height) {
                 let user_tx = s.tx_count.saturating_sub(1);
                 let pct = if user_tx > 0 {
                     (s.financial_count as f64 / user_tx as f64) * 100.0
@@ -660,8 +660,10 @@ fn draw_blocks_table(f: &mut Frame, area: Rect, data: &NodeData, block_stats: &H
                     100.0
                 };
                 let color = if pct >= 90.0 { Color::Green } else if pct >= 70.0 { Color::Yellow } else { Color::Red };
-                let osc = if s.oversized_opreturn_count > 0 { Color::Red } else { Color::Green };
-                (format_btc(s.total_out), format_btc_fees(s.total_fee), format!("{:.0}%", pct), color, format!("{}", s.oversized_opreturn_count), osc)
+                let compliant = user_tx.saturating_sub(s.bip110_violating_txs);
+                let bip110_pct = if user_tx > 0 { compliant as f64 / user_tx as f64 * 100.0 } else { 100.0 };
+                let bc = if bip110_pct >= 99.0 { Color::Green } else if bip110_pct >= 90.0 { Color::Yellow } else { Color::Red };
+                (format_btc(s.total_out), format_btc_fees(s.total_fee), format!("{:.0}%", pct), color, format!("{:.0}%", bip110_pct), bc)
             } else {
                 ("-".to_string(), "-".to_string(), "-".to_string(), Color::DarkGray, "-".to_string(), Color::DarkGray)
             };
@@ -686,7 +688,7 @@ fn draw_blocks_table(f: &mut Frame, area: Rect, data: &NodeData, block_stats: &H
                 Cell::from(btc_out),
                 Cell::from(fees),
                 Cell::from(Span::styled(financial, Style::default().fg(fin_color))),
-                Cell::from(Span::styled(oversized, Style::default().fg(os_color))),
+                Cell::from(Span::styled(bip110_str, Style::default().fg(bip110_color))),
             ])
         })
         .collect();
@@ -1471,7 +1473,7 @@ fn draw_bit_modal(f: &mut Frame, area: Rect, selected_bit: u8, data: &NodeData) 
 
 fn draw_block_modal(f: &mut Frame, area: Rect, block: &BlockInfo, stats: &BlockStats) {
     let modal_width = (area.width as f32 * 0.65) as u16;
-    let modal_height = 37u16.min(area.height - 4);
+    let modal_height = 43u16.min(area.height - 4);
     let x = (area.width.saturating_sub(modal_width)) / 2;
     let y = (area.height.saturating_sub(modal_height)) / 2;
     let modal_area = Rect::new(x, y, modal_width, modal_height);
@@ -1494,6 +1496,10 @@ fn draw_block_modal(f: &mut Frame, area: Rect, block: &BlockInfo, stats: &BlockS
     // Yellow if non-zero, grey if zero
     let proto_color = |count: usize| -> Color {
         if count > 0 { Color::Yellow } else { Color::DarkGray }
+    };
+    // Red if non-zero (violation), green if zero (clean)
+    let viol_color = |count: usize| -> Color {
+        if count > 0 { Color::Red } else { Color::Green }
     };
 
     // Protocol rows: (label, count, vsize, description)
@@ -1592,21 +1598,54 @@ fn draw_block_modal(f: &mut Frame, area: Rect, block: &BlockInfo, stats: &BlockS
             ),
         ]),
         Line::from(""),
-        Line::from(Span::styled("OP_RETURN Size Analysis", Style::default().fg(Color::Cyan).bold())),
+        Line::from(Span::styled("BIP-110 Compliance", Style::default().fg(Color::Cyan).bold())),
         Line::from(vec![
-            Span::styled("  Oversized (>83B):  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("  Compliant txs:   ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!("{} ({:.1}%)", user_tx.saturating_sub(stats.bip110_violating_txs),
+                    if user_tx > 0 { (user_tx.saturating_sub(stats.bip110_violating_txs)) as f64 / user_tx as f64 * 100.0 } else { 100.0 }),
+                Style::default().fg(if stats.bip110_violating_txs == 0 { Color::Green } else { Color::Yellow }).bold(),
+            ),
+        ]),
+        Line::from(Span::styled("  Violations:", Style::default().fg(Color::DarkGray))),
+        Line::from(vec![
+            Span::styled("    OP_RETURN >83B:  ", Style::default().fg(Color::DarkGray)),
             Span::styled(
                 format!("{}", stats.oversized_opreturn_count),
-                Style::default().fg(if stats.oversized_opreturn_count > 0 { Color::Red } else { Color::Green }).bold(),
+                Style::default().fg(viol_color(stats.oversized_opreturn_count)),
             ),
             Span::styled("  Largest: ", Style::default().fg(Color::DarkGray)),
             Span::styled(
-                if stats.max_opreturn_size > 0 {
-                    format!("{} bytes", stats.max_opreturn_size)
-                } else {
-                    "n/a".to_string()
-                },
-                Style::default().fg(if stats.max_opreturn_size > 83 { Color::Red } else { Color::White }).bold(),
+                if stats.max_opreturn_size > 0 { format!("{} bytes", stats.max_opreturn_size) } else { "n/a".to_string() },
+                Style::default().fg(if stats.max_opreturn_size > 83 { Color::Red } else { Color::White }),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("    scriptPubKey>34B:", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!(" {}", stats.bip110_oversized_spk),
+                Style::default().fg(viol_color(stats.bip110_oversized_spk)),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("    Witness >256B:   ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!("{}", stats.bip110_oversized_pushdata),
+                Style::default().fg(viol_color(stats.bip110_oversized_pushdata)),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("    OP_SUCCESS:      ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!("{}", stats.bip110_op_success),
+                Style::default().fg(viol_color(stats.bip110_op_success)),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("    OP_IF in tapscript:", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!(" {}", stats.bip110_op_if),
+                Style::default().fg(viol_color(stats.bip110_op_if)),
             ),
         ]),
         Line::from(""),

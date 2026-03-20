@@ -28,6 +28,101 @@ pub struct TxClassification {
     pub has_taproot_output: bool,
     pub oversized_opreturn_count: usize,
     pub max_opreturn_size: usize,
+    // BIP-110 violations (non-exclusive, a single tx can trigger multiple):
+    pub bip110_oversized_spk: bool,     // output scriptPubKey > 34 bytes (excl nulldata)
+    pub bip110_oversized_pushdata: bool, // witness element > 256 bytes (512 hex chars)
+    pub bip110_op_success: bool,         // OP_SUCCESS in tapscript
+    pub bip110_op_if: bool,              // OP_IF/OP_NOTIF in tapscript
+}
+
+/// Check if a tapscript (hex) contains any OP_SUCCESS opcode.
+/// OP_SUCCESS opcodes: 0x50 (OP_RESERVED/OP_SUCCESS80), 0x62 (OP_VER/OP_SUCCESS98),
+/// 0x89 (OP_SUCCESS137), 0x8a (OP_SUCCESS138), 0xc0-0xc5, 0xc7-0xce, 0xd0-0xff (OP_SUCCESS192+).
+/// We walk the script bytes to skip over push data correctly.
+fn has_op_success(hex: &str) -> bool {
+    let bytes = match hex::decode(hex) {
+        Ok(b) => b,
+        Err(_) => return false,
+    };
+    let mut i = 0;
+    while i < bytes.len() {
+        let op = bytes[i];
+        // Direct push: 0x01..0x4b push N bytes
+        if op >= 0x01 && op <= 0x4b {
+            i += 1 + op as usize;
+            continue;
+        }
+        // OP_PUSHDATA1 (0x4c): next byte is length
+        if op == 0x4c {
+            if i + 1 >= bytes.len() { break; }
+            let len = bytes[i + 1] as usize;
+            i += 2 + len;
+            continue;
+        }
+        // OP_PUSHDATA2 (0x4d): next 2 bytes (LE) are length
+        if op == 0x4d {
+            if i + 2 >= bytes.len() { break; }
+            let len = u16::from_le_bytes([bytes[i + 1], bytes[i + 2]]) as usize;
+            i += 3 + len;
+            continue;
+        }
+        // OP_PUSHDATA4 (0x4e): next 4 bytes (LE) are length
+        if op == 0x4e {
+            if i + 4 >= bytes.len() { break; }
+            let len = u32::from_le_bytes([bytes[i + 1], bytes[i + 2], bytes[i + 3], bytes[i + 4]]) as usize;
+            i += 5 + len;
+            continue;
+        }
+        // Check for OP_SUCCESS opcodes
+        if op == 0x50 || op == 0x62 || op == 0x89 || op == 0x8a
+            || (op >= 0xc0 && op <= 0xc5) || (op >= 0xc7 && op <= 0xce)
+            || op >= 0xd0
+        {
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
+/// Check if a tapscript (hex) contains OP_IF (0x63) or OP_NOTIF (0x64).
+/// Walks the script bytes to skip push data correctly.
+fn has_op_if_notif(hex: &str) -> bool {
+    let bytes = match hex::decode(hex) {
+        Ok(b) => b,
+        Err(_) => return false,
+    };
+    let mut i = 0;
+    while i < bytes.len() {
+        let op = bytes[i];
+        if op >= 0x01 && op <= 0x4b {
+            i += 1 + op as usize;
+            continue;
+        }
+        if op == 0x4c {
+            if i + 1 >= bytes.len() { break; }
+            let len = bytes[i + 1] as usize;
+            i += 2 + len;
+            continue;
+        }
+        if op == 0x4d {
+            if i + 2 >= bytes.len() { break; }
+            let len = u16::from_le_bytes([bytes[i + 1], bytes[i + 2]]) as usize;
+            i += 3 + len;
+            continue;
+        }
+        if op == 0x4e {
+            if i + 4 >= bytes.len() { break; }
+            let len = u32::from_le_bytes([bytes[i + 1], bytes[i + 2], bytes[i + 3], bytes[i + 4]]) as usize;
+            i += 5 + len;
+            continue;
+        }
+        if op == 0x63 || op == 0x64 {
+            return true;
+        }
+        i += 1;
+    }
+    false
 }
 
 /// Classify a single transaction from its JSON representation (getblock verbosity 2)
@@ -46,6 +141,10 @@ pub fn classify_tx(tx: &Value) -> TxClassification {
             has_taproot_output: false,
             oversized_opreturn_count: 0,
             max_opreturn_size: 0,
+            bip110_oversized_spk: false,
+            bip110_oversized_pushdata: false,
+            bip110_op_success: false,
+            bip110_op_if: false,
         };
     }
 
@@ -58,9 +157,17 @@ pub fn classify_tx(tx: &Value) -> TxClassification {
     let mut has_taproot_output = false;
     let mut oversized_opreturn_count = 0usize;
     let mut max_opreturn_size = 0usize;
+    let mut bip110_oversized_spk = false;
     if let Some(outs) = tx["vout"].as_array() {
         for o in outs {
             let script_type = o["scriptPubKey"]["type"].as_str().unwrap_or("");
+            // BIP-110: non-nulldata scriptPubKeys > 34 bytes are invalid
+            if script_type != "nulldata" {
+                let spk_hex = o["scriptPubKey"]["hex"].as_str().unwrap_or("");
+                if spk_hex.len() / 2 > 34 {
+                    bip110_oversized_spk = true;
+                }
+            }
             if script_type == "nulldata" {
                 has_opreturn = true;
                 let script_hex = o["scriptPubKey"]["hex"].as_str().unwrap_or("");
@@ -95,11 +202,14 @@ pub fn classify_tx(tx: &Value) -> TxClassification {
     let mut has_brc20 = false;
     let mut has_opnet = false;
     let mut has_taproot_spend = false;
+    let mut bip110_oversized_pushdata = false;
+    let mut bip110_op_success = false;
+    let mut bip110_op_if = false;
     if let Some(ins) = tx["vin"].as_array() {
         for input in ins {
-            if input["prevout"]["scriptPubKey"]["type"].as_str()
-                == Some("witness_v1_taproot")
-            {
+            let is_taproot_input = input["prevout"]["scriptPubKey"]["type"].as_str()
+                == Some("witness_v1_taproot");
+            if is_taproot_input {
                 has_taproot_spend = true;
             }
             if let Some(witness) = input["txinwitness"].as_array() {
@@ -110,6 +220,32 @@ pub fn classify_tx(tx: &Value) -> TxClassification {
                         has_opnet = true;
                     }
                 }
+
+                // BIP-110: check witness elements for oversized pushdata (>256 bytes = 512 hex)
+                for item in witness {
+                    if let Some(hex) = item.as_str() {
+                        if hex.len() > 512 {
+                            bip110_oversized_pushdata = true;
+                        }
+                    }
+                }
+
+                // BIP-110: check tapscript for OP_SUCCESS and OP_IF/OP_NOTIF
+                // Taproot script-path spend: witness = [inputs...] [tapscript] [control_block]
+                // Control block starts with 0xc0 or 0xc1 (leaf version | parity)
+                if is_taproot_input && witness.len() >= 2 {
+                    let ctrl = witness[witness.len() - 1].as_str().unwrap_or("");
+                    if ctrl.starts_with("c0") || ctrl.starts_with("c1") {
+                        let tapscript_hex = witness[witness.len() - 2].as_str().unwrap_or("");
+                        if has_op_success(tapscript_hex) {
+                            bip110_op_success = true;
+                        }
+                        if has_op_if_notif(tapscript_hex) {
+                            bip110_op_if = true;
+                        }
+                    }
+                }
+
                 for item in witness {
                     if let Some(hex) = item.as_str() {
                         if hex.contains("0063036f7264") {
@@ -154,6 +290,10 @@ pub fn classify_tx(tx: &Value) -> TxClassification {
         has_taproot_output,
         oversized_opreturn_count,
         max_opreturn_size,
+        bip110_oversized_spk,
+        bip110_oversized_pushdata,
+        bip110_op_success,
+        bip110_op_if,
     }
 }
 
@@ -183,6 +323,11 @@ pub fn classify_block(txs: &[Value], total_out: u64, total_fee: u64, height: u64
     let mut max_opreturn_size = 0usize;
     let mut taproot_spend_count = 0usize;
     let mut taproot_output_count = 0usize;
+    let mut bip110_oversized_spk = 0usize;
+    let mut bip110_oversized_pushdata = 0usize;
+    let mut bip110_op_success = 0usize;
+    let mut bip110_op_if = 0usize;
+    let mut bip110_violating_txs = 0usize;
 
     for tx in txs {
         let c = classify_tx(tx);
@@ -209,6 +354,15 @@ pub fn classify_block(txs: &[Value], total_out: u64, total_fee: u64, height: u64
 
         if c.has_taproot_spend { taproot_spend_count += 1; }
         if c.has_taproot_output { taproot_output_count += 1; }
+
+        // BIP-110 violations
+        let has_any_violation = c.bip110_oversized_spk || c.bip110_oversized_pushdata
+            || c.bip110_op_success || c.bip110_op_if || c.oversized_opreturn_count > 0;
+        if has_any_violation { bip110_violating_txs += 1; }
+        if c.bip110_oversized_spk { bip110_oversized_spk += 1; }
+        if c.bip110_oversized_pushdata { bip110_oversized_pushdata += 1; }
+        if c.bip110_op_success { bip110_op_success += 1; }
+        if c.bip110_op_if { bip110_op_if += 1; }
     }
 
     let user_tx = tx_count.saturating_sub(1);
@@ -248,6 +402,11 @@ pub fn classify_block(txs: &[Value], total_out: u64, total_fee: u64, height: u64
         max_opreturn_size,
         taproot_spend_count,
         taproot_output_count,
+        bip110_oversized_spk,
+        bip110_oversized_pushdata,
+        bip110_op_success,
+        bip110_op_if,
+        bip110_violating_txs,
     }
 }
 
@@ -538,6 +697,12 @@ pub struct BlockStats {
     pub max_opreturn_size: usize,  // largest OP_RETURN scriptPubKey in bytes
     pub taproot_spend_count: usize,  // txs spending from taproot inputs
     pub taproot_output_count: usize, // txs creating taproot outputs
+    // BIP-110 violation counts (txs violating each rule):
+    #[serde(default)] pub bip110_oversized_spk: usize,      // scriptPubKey > 34 bytes (excl nulldata)
+    #[serde(default)] pub bip110_oversized_pushdata: usize,  // witness element > 256 bytes
+    #[serde(default)] pub bip110_op_success: usize,          // OP_SUCCESS in tapscript
+    #[serde(default)] pub bip110_op_if: usize,               // OP_IF/OP_NOTIF in tapscript
+    #[serde(default)] pub bip110_violating_txs: usize,       // txs with any BIP-110 violation
 }
 
 #[derive(Deserialize)]
@@ -990,6 +1155,11 @@ mod tests {
             max_opreturn_size: 200,
             taproot_spend_count: 100,
             taproot_output_count: 150,
+            bip110_oversized_spk: 0,
+            bip110_oversized_pushdata: 0,
+            bip110_op_success: 0,
+            bip110_op_if: 0,
+            bip110_violating_txs: 0,
         };
         let json_str = serde_json::to_string(&stats).unwrap();
         let deserialized: BlockStats = serde_json::from_str(&json_str).unwrap();
