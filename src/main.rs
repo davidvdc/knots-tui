@@ -306,6 +306,8 @@ async fn main() -> anyhow::Result<()> {
 
     // Unified block stats channel — serves both dashboard details and analytics
     let (stats_tx, mut stats_rx) = mpsc::channel::<BlockStats>(16);
+    // Channel for background-fetched older block infos
+    let (older_blocks_tx, mut older_blocks_rx) = mpsc::channel::<Vec<rpc::BlockInfo>>(1);
     let backfill_stop = Arc::new(AtomicBool::new(false));
 
     let mut node_data = NodeData::default();
@@ -394,6 +396,22 @@ async fn main() -> anyhow::Result<()> {
                             analytics.state = AnalyticsState::Done;
                             analytics.missing_blocks = 0;
                         }
+
+                        // Background-fetch older blocks (9..50) for scrolling
+                        let lowest = data.recent_blocks.last().map(|b| b.height).unwrap_or(0);
+                        if lowest > 1 {
+                            let older_heights: Vec<u64> = (1..=42)
+                                .map(|i| lowest.saturating_sub(i))
+                                .filter(|&h| h > 0)
+                                .collect();
+                            let c = client.clone();
+                            let tx = older_blocks_tx.clone();
+                            tokio::spawn(async move {
+                                if let Ok(blocks) = c.fetch_block_infos(&older_heights).await {
+                                    let _ = tx.send(blocks).await;
+                                }
+                            });
+                        }
                     } else if new_tip > last_tip_height && last_tip_height > 0 {
                         // New blocks mined — fetch their stats
                         let new_blocks: Vec<(u64, String)> = data
@@ -467,6 +485,15 @@ async fn main() -> anyhow::Result<()> {
                     }
                 }
                 rpc_spinner = rpc_spinner.wrapping_add(1);
+                redraw = true;
+            }
+            Some(blocks) = older_blocks_rx.recv() => {
+                let existing: std::collections::HashSet<u64> = node_data.recent_blocks.iter().map(|b| b.height).collect();
+                for b in blocks {
+                    if !existing.contains(&b.height) && node_data.recent_blocks.len() < 50 {
+                        node_data.recent_blocks.push(b);
+                    }
+                }
                 redraw = true;
             }
             Some(Ok(event)) = event_stream.next() => {
