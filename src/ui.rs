@@ -1030,6 +1030,7 @@ fn service_bit_name(bit: u8) -> &'static str {
         6 => "NODE_COMPACT_FILTERS",
         10 => "NODE_NETWORK_LIMITED",
         24 => "NODE_P2P_V2",
+        27 => "NODE_REDUCED_DATA",
         _ => "",
     }
 }
@@ -1043,6 +1044,7 @@ fn service_bit_desc(bit: u8) -> &'static str {
         6 => "Serves BIP157 compact block filters for light clients",
         10 => "Pruned node, serves last 288 blocks only",
         24 => "Encrypted P2P via v2 transport (BIP324)",
+        27 => "Enforces BIP-110 ReducedData rules",
         _ => "",
     }
 }
