@@ -684,10 +684,10 @@ impl RpcClient {
             .map(|a| a.len() as u64)
             .unwrap_or(0);
 
-        // Fetch recent blocks (last 50) using batched RPC calls
+        // Fetch recent blocks (last 8) using batched RPC calls
         let mut recent_blocks = Vec::new();
         let tip = blockchain.blocks;
-        let num_blocks = 50u64.min(tip + 1);
+        let num_blocks = 8u64.min(tip + 1);
         let heights: Vec<u64> = (0..num_blocks).map(|i| tip - i).collect();
 
         // Batch getblockhash for all heights

@@ -426,7 +426,15 @@ async fn main() -> anyhow::Result<()> {
                     prev_ibd_height = data.blockchain.blocks;
                     prev_ibd_bytes_recv = data.net_totals.totalbytesrecv;
                     prev_ibd_fetched_at = data.fetched_at;
+                    // Accumulate older blocks from previous fetches
+                    let old_blocks = std::mem::take(&mut node_data.recent_blocks);
                     node_data = data;
+                    let new_heights: std::collections::HashSet<u64> = node_data.recent_blocks.iter().map(|b| b.height).collect();
+                    for b in old_blocks {
+                        if !new_heights.contains(&b.height) && node_data.recent_blocks.len() < 50 {
+                            node_data.recent_blocks.push(b);
+                        }
+                    }
                 } else if !data.known_addresses.is_empty() {
                     // KnownPeers fetch — merge without clobbering dashboard fields
                     node_data.blockchain = data.blockchain;
