@@ -746,35 +746,37 @@ impl RpcClient {
     }
 
     pub async fn fetch_block_infos(&self, heights: &[u64]) -> Result<Vec<BlockInfo>, String> {
-        let hash_calls: Vec<(&str, Value)> = heights
-            .iter()
-            .map(|&h| ("getblockhash", json!([h])))
-            .collect();
-        let hash_results = self.batch_call(&hash_calls).await?;
-        let hashes: Vec<String> = hash_results
-            .iter()
-            .map(|v| v.as_str().unwrap_or("").to_string())
-            .collect();
-
-        let block_calls: Vec<(&str, Value)> = hashes
-            .iter()
-            .map(|h| ("getblock", json!([h, 1])))
-            .collect();
-        let block_results = self.batch_call(&block_calls).await?;
-
         let mut blocks = Vec::new();
-        for (i, block_val) in block_results.iter().enumerate() {
-            blocks.push(BlockInfo {
-                height: block_val["height"].as_u64().unwrap_or(heights[i]),
-                hash: hashes[i].clone(),
-                size: block_val["size"].as_u64().unwrap_or(0),
-                weight: block_val["weight"].as_u64().unwrap_or(0),
-                tx_count: block_val["nTx"].as_u64().unwrap_or(
-                    block_val["tx"].as_array().map(|a| a.len() as u64).unwrap_or(0),
-                ) as usize,
-                time: block_val["time"].as_u64().unwrap_or(0),
-                version: block_val["version"].as_i64().unwrap_or(0),
-            });
+        for chunk in heights.chunks(100) {
+            let hash_calls: Vec<(&str, Value)> = chunk
+                .iter()
+                .map(|&h| ("getblockhash", json!([h])))
+                .collect();
+            let hash_results = self.batch_call(&hash_calls).await?;
+            let hashes: Vec<String> = hash_results
+                .iter()
+                .map(|v| v.as_str().unwrap_or("").to_string())
+                .collect();
+
+            let block_calls: Vec<(&str, Value)> = hashes
+                .iter()
+                .map(|h| ("getblock", json!([h, 1])))
+                .collect();
+            let block_results = self.batch_call(&block_calls).await?;
+
+            for (i, block_val) in block_results.iter().enumerate() {
+                blocks.push(BlockInfo {
+                    height: block_val["height"].as_u64().unwrap_or(chunk[i]),
+                    hash: hashes[i].clone(),
+                    size: block_val["size"].as_u64().unwrap_or(0),
+                    weight: block_val["weight"].as_u64().unwrap_or(0),
+                    tx_count: block_val["nTx"].as_u64().unwrap_or(
+                        block_val["tx"].as_array().map(|a| a.len() as u64).unwrap_or(0),
+                    ) as usize,
+                    time: block_val["time"].as_u64().unwrap_or(0),
+                    version: block_val["version"].as_i64().unwrap_or(0),
+                });
+            }
         }
         Ok(blocks)
     }

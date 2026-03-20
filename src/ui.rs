@@ -622,7 +622,7 @@ fn draw_peers_table(f: &mut Frame, area: Rect, data: &NodeData, scroll: u16, foc
 }
 
 fn draw_blocks_table(f: &mut Frame, area: Rect, data: &NodeData, block_stats: &HashMap<u64, BlockStats>, selected_block: u16, block_scroll: u16, focused: bool) {
-    let header = Row::new(vec![" ", "Height", "TXs", "Size", "Weight", "Age", "BIP110", "BTC Out", "Fees", "Fin%", ">83B"])
+    let header = Row::new(vec![" ", "Height", "Time", "TXs", "Size", "Weight", "Age", "BIP110", "BTC Out", "Fees", "Fin%", ">83B"])
         .style(Style::default().fg(Color::Cyan).bold())
         .bottom_margin(0);
 
@@ -666,9 +666,18 @@ fn draw_blocks_table(f: &mut Frame, area: Rect, data: &NodeData, block_stats: &H
                 ("-".to_string(), "-".to_string(), "-".to_string(), Color::DarkGray, "-".to_string(), Color::DarkGray)
             };
 
+            let timestamp = if b.time > 0 {
+                chrono::DateTime::from_timestamp(b.time as i64, 0)
+                    .map(|dt| dt.format("%m-%d %H:%M").to_string())
+                    .unwrap_or("-".to_string())
+            } else {
+                "-".to_string()
+            };
+
             Row::new(vec![
                 Cell::from(Span::styled(marker, Style::default().fg(Color::Yellow))),
                 Cell::from(format_number(b.height)),
+                Cell::from(timestamp),
                 Cell::from(format_number(b.tx_count as u64)),
                 Cell::from(format_bytes_short(b.size)),
                 Cell::from(format!("{:.1} kvWU", b.weight as f64 / 1000.0)),
@@ -683,17 +692,18 @@ fn draw_blocks_table(f: &mut Frame, area: Rect, data: &NodeData, block_stats: &H
         .collect();
 
     let widths = vec![
-        Constraint::Length(2),
-        Constraint::Length(10),
-        Constraint::Length(7),
-        Constraint::Length(10),
-        Constraint::Length(12),
-        Constraint::Length(12),
-        Constraint::Length(7),
-        Constraint::Length(12),
-        Constraint::Length(12),
-        Constraint::Length(5),
-        Constraint::Min(4),
+        Constraint::Length(2),  // marker
+        Constraint::Length(10), // Height
+        Constraint::Length(12), // Time
+        Constraint::Length(7),  // TXs
+        Constraint::Length(10), // Size
+        Constraint::Length(12), // Weight
+        Constraint::Length(12), // Age
+        Constraint::Length(7),  // BIP110
+        Constraint::Length(12), // BTC Out
+        Constraint::Length(12), // Fees
+        Constraint::Length(5),  // Fin%
+        Constraint::Min(4),    // >83B
     ];
 
     let total = data.recent_blocks.len();

@@ -318,6 +318,7 @@ async fn main() -> anyhow::Result<()> {
     let mut selected_block: u16 = 0;
     let mut block_scroll: u16 = 0;
     let mut show_block_modal = false;
+    let mut fetching_older_blocks = false;
     let mut blocks_focused = true; // true = blocks table, false = peers table
     let mut screen = Screen::Dashboard;
     let mut selected_bit: u8 = 0;
@@ -397,21 +398,6 @@ async fn main() -> anyhow::Result<()> {
                             analytics.missing_blocks = 0;
                         }
 
-                        // Background-fetch older blocks (9..50) for scrolling
-                        let lowest = data.recent_blocks.last().map(|b| b.height).unwrap_or(0);
-                        if lowest > 1 {
-                            let older_heights: Vec<u64> = (1..=42)
-                                .map(|i| lowest.saturating_sub(i))
-                                .filter(|&h| h > 0)
-                                .collect();
-                            let c = client.clone();
-                            let tx = older_blocks_tx.clone();
-                            tokio::spawn(async move {
-                                if let Ok(blocks) = c.fetch_block_infos(&older_heights).await {
-                                    let _ = tx.send(blocks).await;
-                                }
-                            });
-                        }
                     } else if new_tip > last_tip_height && last_tip_height > 0 {
                         // New blocks mined — fetch their stats
                         let new_blocks: Vec<(u64, String)> = data
@@ -449,7 +435,7 @@ async fn main() -> anyhow::Result<()> {
                     node_data = data;
                     let new_heights: std::collections::HashSet<u64> = node_data.recent_blocks.iter().map(|b| b.height).collect();
                     for b in old_blocks {
-                        if !new_heights.contains(&b.height) && node_data.recent_blocks.len() < 50 {
+                        if !new_heights.contains(&b.height) {
                             node_data.recent_blocks.push(b);
                         }
                     }
@@ -488,9 +474,10 @@ async fn main() -> anyhow::Result<()> {
                 redraw = true;
             }
             Some(blocks) = older_blocks_rx.recv() => {
+                fetching_older_blocks = false;
                 let existing: std::collections::HashSet<u64> = node_data.recent_blocks.iter().map(|b| b.height).collect();
                 for b in blocks {
-                    if !existing.contains(&b.height) && node_data.recent_blocks.len() < 50 {
+                    if !existing.contains(&b.height) {
                         node_data.recent_blocks.push(b);
                     }
                 }
@@ -514,6 +501,23 @@ async fn main() -> anyhow::Result<()> {
                                 }
                                 KeyCode::Down => {
                                     let max = node_data.recent_blocks.len().saturating_sub(1) as u16;
+                                    if selected_block == max && !fetching_older_blocks {
+                                        if let Some(lowest) = node_data.recent_blocks.last().map(|b| b.height) {
+                                            if lowest > 1 {
+                                                fetching_older_blocks = true;
+                                                let end = lowest.saturating_sub(1);
+                                                let start = end.saturating_sub(49);
+                                                let heights: Vec<u64> = (start..=end).rev().collect();
+                                                let c = client.clone();
+                                                let tx = older_blocks_tx.clone();
+                                                tokio::spawn(async move {
+                                                    if let Ok(blocks) = c.fetch_block_infos(&heights).await {
+                                                        let _ = tx.send(blocks).await;
+                                                    }
+                                                });
+                                            }
+                                        }
+                                    }
                                     selected_block = (selected_block + 1).min(max);
                                     if selected_block >= block_scroll + 8 {
                                         block_scroll = selected_block - 7;
@@ -562,6 +566,23 @@ async fn main() -> anyhow::Result<()> {
                                     } else if screen == Screen::Dashboard {
                                         if blocks_focused {
                                             let max = node_data.recent_blocks.len().saturating_sub(1) as u16;
+                                            if selected_block == max && !fetching_older_blocks {
+                                                if let Some(lowest) = node_data.recent_blocks.last().map(|b| b.height) {
+                                                    if lowest > 1 {
+                                                        fetching_older_blocks = true;
+                                                        let end = lowest.saturating_sub(1);
+                                                        let start = end.saturating_sub(49);
+                                                        let heights: Vec<u64> = (start..=end).rev().collect();
+                                                        let c = client.clone();
+                                                        let tx = older_blocks_tx.clone();
+                                                        tokio::spawn(async move {
+                                                            if let Ok(blocks) = c.fetch_block_infos(&heights).await {
+                                                                let _ = tx.send(blocks).await;
+                                                            }
+                                                        });
+                                                    }
+                                                }
+                                            }
                                             selected_block = (selected_block + 1).min(max);
                                             if selected_block >= block_scroll + 8 {
                                                 block_scroll = selected_block - 7;
