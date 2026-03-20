@@ -1760,6 +1760,7 @@ struct DayAgg {
     omni: u64,
     opreturn_other: u64,
     oversized_opreturn: u64,
+    bip110_violating_txs: u64,
     total_vsize: u64,
     financial_vsize: u64,
     rune_vsize: u64,
@@ -1777,7 +1778,7 @@ impl DayAgg {
         DayAgg {
             blocks: 0, txs: 0, financial: 0, runes: 0, brc20: 0, inscriptions: 0,
             opnet: 0, stamps: 0, counterparty: 0, omni: 0, opreturn_other: 0,
-            oversized_opreturn: 0,
+            oversized_opreturn: 0, bip110_violating_txs: 0,
             total_vsize: 0, financial_vsize: 0, rune_vsize: 0, brc20_vsize: 0,
             inscription_vsize: 0, opnet_vsize: 0, stamp_vsize: 0, counterparty_vsize: 0,
             omni_vsize: 0, opreturn_other_vsize: 0,
@@ -1798,6 +1799,7 @@ impl DayAgg {
         self.omni += s.omni_count as u64;
         self.opreturn_other += s.opreturn_other_count as u64;
         self.oversized_opreturn += s.oversized_opreturn_count as u64;
+        self.bip110_violating_txs += s.bip110_violating_txs as u64;
         self.total_vsize += s.total_vsize;
         self.financial_vsize += s.financial_vsize;
         self.rune_vsize += s.rune_vsize;
@@ -1838,7 +1840,7 @@ fn analytics_widths() -> [Constraint; 22] {
         Constraint::Length(6),  // OPR count
         Constraint::Length(5),  // OPR %
         Constraint::Length(1),  // |
-        Constraint::Length(5),  // >83B
+        Constraint::Length(5),  // 110%
     ]
 }
 
@@ -1867,7 +1869,7 @@ fn analytics_header_row() -> Row<'static> {
         Cell::from(format!("{:>6}", "OPR")).style(hdr_detail),
         Cell::from("%").style(hdr_detail),
         Cell::from("|").style(Style::default().fg(Color::DarkGray)),
-        Cell::from(format!("{:>5}", ">83B")).style(Style::default().fg(Color::Red).bold()),
+        Cell::from(format!("{:>5}", "110%")).style(Style::default().fg(Color::Green).bold()),
     ])
 }
 
@@ -1894,9 +1896,11 @@ fn analytics_data_row(label: &str, d: &DayAgg) -> Row<'static> {
         cells.push(Cell::from(format!("{:>6}", format_compact(count))).style(Style::default().fg(c)));
         cells.push(Cell::from(format!("{}%", pct_str(count, data_tx))).style(Style::default().fg(c)));
     }
-    let c83 = if d.oversized_opreturn > 0 { Color::Red } else { Color::DarkGray };
+    let compliant = d.txs.saturating_sub(d.bip110_violating_txs);
+    let bip110_pct = if d.txs > 0 { compliant as f64 / d.txs as f64 * 100.0 } else { 100.0 };
+    let bip110_color = if bip110_pct >= 99.0 { Color::Green } else if bip110_pct >= 90.0 { Color::Yellow } else { Color::Red };
     cells.push(sep());
-    cells.push(Cell::from(format!("{:>5}", format_compact(d.oversized_opreturn))).style(Style::default().fg(c83)));
+    cells.push(Cell::from(format!("{:.0}%", bip110_pct)).style(Style::default().fg(bip110_color)));
     Row::new(cells)
 }
 
