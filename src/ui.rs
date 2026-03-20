@@ -661,9 +661,15 @@ fn draw_blocks_table(f: &mut Frame, area: Rect, data: &NodeData, block_stats: &H
                 };
                 let color = if pct >= 90.0 { Color::Green } else if pct >= 70.0 { Color::Yellow } else { Color::Red };
                 let compliant = user_tx.saturating_sub(s.bip110_violating_txs);
-                let bip110_pct = if user_tx > 0 { compliant as f64 / user_tx as f64 * 100.0 } else { 100.0 };
-                let bc = if bip110_pct >= 99.0 { Color::Green } else if bip110_pct >= 90.0 { Color::Yellow } else { Color::Red };
-                (format_btc(s.total_out), format_btc_fees(s.total_fee), format!("{:.0}%", pct), color, format!("{:.0}%", bip110_pct), bc)
+                let mut bip110_pct = if user_tx > 0 { compliant as f64 / user_tx as f64 * 100.0 } else { 100.0 };
+                if s.bip110_violating_txs > 0 && bip110_pct > 99.9 { bip110_pct = 99.9; }
+                let bc = if s.bip110_violating_txs == 0 { Color::Green } else if bip110_pct >= 99.0 { Color::Yellow } else { Color::Red };
+                let bip110_str = if s.bip110_violating_txs > 0 {
+                    format!("{:.1}% ({})", bip110_pct, s.bip110_violating_txs)
+                } else {
+                    "100%".to_string()
+                };
+                (format_btc(s.total_out), format_btc_fees(s.total_fee), format!("{:.0}%", pct), color, bip110_str, bc)
             } else {
                 ("-".to_string(), "-".to_string(), "-".to_string(), Color::DarkGray, "-".to_string(), Color::DarkGray)
             };
@@ -1840,7 +1846,7 @@ fn analytics_widths() -> [Constraint; 22] {
         Constraint::Length(6),  // OPR count
         Constraint::Length(5),  // OPR %
         Constraint::Length(1),  // |
-        Constraint::Length(5),  // 110%
+        Constraint::Min(5),    // 110%
     ]
 }
 
@@ -1897,10 +1903,16 @@ fn analytics_data_row(label: &str, d: &DayAgg) -> Row<'static> {
         cells.push(Cell::from(format!("{}%", pct_str(count, data_tx))).style(Style::default().fg(c)));
     }
     let compliant = d.txs.saturating_sub(d.bip110_violating_txs);
-    let bip110_pct = if d.txs > 0 { compliant as f64 / d.txs as f64 * 100.0 } else { 100.0 };
-    let bip110_color = if bip110_pct >= 99.0 { Color::Green } else if bip110_pct >= 90.0 { Color::Yellow } else { Color::Red };
+    let mut bip110_pct = if d.txs > 0 { compliant as f64 / d.txs as f64 * 100.0 } else { 100.0 };
+    if d.bip110_violating_txs > 0 && bip110_pct > 99.9 { bip110_pct = 99.9; }
+    let bip110_color = if d.bip110_violating_txs == 0 { Color::Green } else if bip110_pct >= 99.0 { Color::Yellow } else { Color::Red };
+    let bip110_str = if d.bip110_violating_txs > 0 {
+        format!("{:.1}% ({})", bip110_pct, format_compact(d.bip110_violating_txs))
+    } else {
+        "100%".to_string()
+    };
     cells.push(sep());
-    cells.push(Cell::from(format!("{:.0}%", bip110_pct)).style(Style::default().fg(bip110_color)));
+    cells.push(Cell::from(bip110_str).style(Style::default().fg(bip110_color)));
     Row::new(cells)
 }
 
