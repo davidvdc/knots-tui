@@ -124,6 +124,17 @@ fn draw_ibd_screen(f: &mut Frame, area: Rect, data: &NodeData, peer_scroll: u16)
         Line::from(vec![
             Span::styled("Synced:   ", gray),
             Span::styled(format!("{} / {} blocks", format_number(bc.blocks), format_number(bc.headers)), white),
+            Span::styled("   tip: ", gray),
+            Span::styled(
+                if bc.time > 0 {
+                    chrono::DateTime::from_timestamp(bc.time as i64, 0)
+                        .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
+                        .unwrap_or_else(|| "-".to_string())
+                } else {
+                    "-".to_string()
+                },
+                cyan,
+            ),
         ]),
         Line::from(vec![
             Span::styled("Speed:    ", gray),
