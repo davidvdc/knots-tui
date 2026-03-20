@@ -1459,7 +1459,7 @@ fn draw_bit_modal(f: &mut Frame, area: Rect, selected_bit: u8, data: &NodeData) 
 
 fn draw_block_modal(f: &mut Frame, area: Rect, block: &BlockInfo, stats: &BlockStats) {
     let modal_width = (area.width as f32 * 0.65) as u16;
-    let modal_height = 36u16.min(area.height - 4);
+    let modal_height = 37u16.min(area.height - 4);
     let x = (area.width.saturating_sub(modal_width)) / 2;
     let y = (area.height.saturating_sub(modal_height)) / 2;
     let modal_area = Rect::new(x, y, modal_width, modal_height);
@@ -1483,17 +1483,17 @@ fn draw_block_modal(f: &mut Frame, area: Rect, block: &BlockInfo, stats: &BlockS
         if count > 0 { Color::Yellow } else { Color::DarkGray }
     };
 
-    // Protocol rows: (label, count, description)
-    let protocols: Vec<(&str, usize, &str)> = vec![
-        ("Runes",          stats.rune_count,          "fungible tokens via OP_RETURN"),
-        ("BRC-20",         stats.brc20_count,         "token standard via ordinals"),
-        ("Inscriptions",   stats.inscription_count,   "ordinals data (images, text, etc.)"),
-        ("OPNET",          stats.opnet_count,          "smart contracts via tapscript"),
-        ("Stamps",         stats.stamp_count,          "SRC-20 tokens via bare multisig"),
-        ("Counterparty",   stats.counterparty_count,   "asset protocol (XCP)"),
-        ("Omni Layer",     stats.omni_count,           "token layer (ex-Mastercoin)"),
-        ("OP_RETURN other", stats.opreturn_other_count, "unclassified nulldata"),
-        ("Other",          stats.other_data_count,     "data tx, unknown protocol"),
+    // Protocol rows: (label, count, vsize, description)
+    let protocols: Vec<(&str, usize, u64, &str)> = vec![
+        ("Runes",          stats.rune_count,          stats.rune_vsize,          "fungible tokens via OP_RETURN"),
+        ("BRC-20",         stats.brc20_count,         stats.brc20_vsize,         "token standard via ordinals"),
+        ("Inscriptions",   stats.inscription_count,   stats.inscription_vsize,   "ordinals data (images, text, etc.)"),
+        ("OPNET",          stats.opnet_count,          stats.opnet_vsize,         "smart contracts via tapscript"),
+        ("Stamps",         stats.stamp_count,          stats.stamp_vsize,         "SRC-20 tokens via bare multisig"),
+        ("Counterparty",   stats.counterparty_count,   stats.counterparty_vsize,  "asset protocol (XCP)"),
+        ("Omni Layer",     stats.omni_count,           stats.omni_vsize,          "token layer (ex-Mastercoin)"),
+        ("OP_RETURN other", stats.opreturn_other_count, stats.opreturn_other_vsize, "unclassified nulldata"),
+        ("Other",          stats.other_data_count,     stats.other_data_vsize,    "data tx, unknown protocol"),
     ];
 
     let mut text = vec![
@@ -1509,6 +1509,13 @@ fn draw_block_modal(f: &mut Frame, area: Rect, block: &BlockInfo, stats: &BlockS
             Span::styled("Transactions:    ", Style::default().fg(Color::DarkGray)),
             Span::styled(format!("{}", user_tx), Style::default().fg(Color::White).bold()),
             Span::styled("  (excl. coinbase)", Style::default().fg(Color::DarkGray)),
+        ]),
+        Line::from(vec![
+            Span::styled("Total weight:    ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!("{} WU ({:.1}%)", format_number(block.weight), block.weight as f64 / 4_000_000.0 * 100.0),
+                Style::default().fg(Color::White).bold(),
+            ),
         ]),
         Line::from(""),
         Line::from(Span::styled("Transaction Breakdown", Style::default().fg(Color::Cyan).bold())),
@@ -1529,11 +1536,18 @@ fn draw_block_modal(f: &mut Frame, area: Rect, block: &BlockInfo, stats: &BlockS
         Line::from(""),
         Line::from(Span::styled("Protocol Breakdown", Style::default().fg(Color::Cyan).bold())),
     ];
-    for (label, count, desc) in &protocols {
+    let vsize_pct = |vs: u64| -> f64 {
+        if stats.total_vsize > 0 { (vs as f64 / stats.total_vsize as f64) * 100.0 } else { 0.0 }
+    };
+    for (label, count, vsize, desc) in &protocols {
         text.push(Line::from(vec![
             Span::styled(format!("  {:17}", format!("{}:", label)), Style::default().fg(Color::DarkGray)),
             Span::styled(
                 format!("{:>4} ({:.1}%)", count, pct(*count)),
+                Style::default().fg(proto_color(*count)),
+            ),
+            Span::styled(
+                format!("  {:>5}% wt", format!("{:.1}", vsize_pct(*vsize))),
                 Style::default().fg(proto_color(*count)),
             ),
             Span::styled(format!("  {}", desc), Style::default().fg(Color::DarkGray)),
