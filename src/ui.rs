@@ -1470,6 +1470,7 @@ fn draw_block_modal(f: &mut Frame, area: Rect, block: &BlockInfo, stats: &BlockS
 
     let user_tx = stats.tx_count.saturating_sub(1); // exclude coinbase
     let data_count = user_tx.saturating_sub(stats.financial_count);
+    let data_vsize = stats.total_vsize.saturating_sub(stats.financial_vsize);
     let pct = |count: usize| -> f64 {
         if user_tx > 0 { (count as f64 / user_tx as f64) * 100.0 } else { 0.0 }
     };
@@ -1525,12 +1526,20 @@ fn draw_block_modal(f: &mut Frame, area: Rect, block: &BlockInfo, stats: &BlockS
                 format!("{} ({:.1}%)", stats.financial_count, fin_pct),
                 Style::default().fg(Color::Green).bold(),
             ),
+            Span::styled(
+                format!("  {:>5}% wt", format!("{:.1}", if stats.total_vsize > 0 { stats.financial_vsize as f64 / stats.total_vsize as f64 * 100.0 } else { 0.0 })),
+                Style::default().fg(Color::Green),
+            ),
         ]),
         Line::from(vec![
             Span::styled("  Data/spam:       ", Style::default().fg(Color::DarkGray)),
             Span::styled(
                 format!("{} ({:.1}%)", data_count, data_pct),
                 Style::default().fg(if data_pct > 10.0 { Color::Red } else { Color::Yellow }).bold(),
+            ),
+            Span::styled(
+                format!("  {:>5}% wt", format!("{:.1}", if stats.total_vsize > 0 { data_vsize as f64 / stats.total_vsize as f64 * 100.0 } else { 0.0 })),
+                Style::default().fg(if data_pct > 10.0 { Color::Red } else { Color::Yellow }),
             ),
         ]),
         Line::from(""),
