@@ -622,7 +622,21 @@ fn draw_peers_table(f: &mut Frame, area: Rect, data: &NodeData, scroll: u16, foc
 }
 
 fn draw_blocks_table(f: &mut Frame, area: Rect, data: &NodeData, block_stats: &HashMap<u64, BlockStats>, selected_block: u16, block_scroll: u16, focused: bool) {
-    let header = Row::new(vec![" ", "Height", "Time", "TXs", "Size", "Weight", "Age", "BIP110", "BTC Out", "Fees", "Fin%", "!110"])
+    let header = Row::new(vec![
+        Cell::from(" "),
+        Cell::from("Height"),
+        Cell::from("Time"),
+        Cell::from("TXs"),
+        Cell::from("Size"),
+        Cell::from("Weight"),
+        Cell::from("Age"),
+        Cell::from("BIP110"),
+        Cell::from("BTC Out"),
+        Cell::from("Fees"),
+        Cell::from("Fin%"),
+        Cell::from(Line::from("!110").alignment(Alignment::Right)),
+        Cell::from("!110%"),
+    ])
         .style(Style::default().fg(Color::Cyan).bold())
         .bottom_margin(0);
 
@@ -652,7 +666,7 @@ fn draw_blocks_table(f: &mut Frame, area: Rect, data: &NodeData, block_stats: &H
             let bip110_color = if bip110 == "yes" { Color::Green } else { Color::DarkGray };
             let marker = if focused && i == selected_block as usize { ">" } else { " " };
 
-            let (btc_out, fees, financial, fin_color, bip110_str, bip110_color) = if let Some(s) = block_stats.get(&b.height) {
+            let (btc_out, fees, financial, fin_color, viol_count, viol_pct_str, viol_color) = if let Some(s) = block_stats.get(&b.height) {
                 let user_tx = s.tx_count.saturating_sub(1);
                 let pct = if user_tx > 0 {
                     (s.financial_count as f64 / user_tx as f64) * 100.0
@@ -661,15 +675,12 @@ fn draw_blocks_table(f: &mut Frame, area: Rect, data: &NodeData, block_stats: &H
                 };
                 let color = if pct >= 90.0 { Color::Green } else if pct >= 70.0 { Color::Yellow } else { Color::Red };
                 let viol_pct = if user_tx > 0 { s.bip110_violating_txs as f64 / user_tx as f64 * 100.0 } else { 0.0 };
-                let bc = if s.bip110_violating_txs == 0 { Color::Green } else if viol_pct <= 1.0 { Color::Yellow } else { Color::Red };
-                let bip110_str = if s.bip110_violating_txs > 0 {
-                    format!("{} ({:.1}%)", s.bip110_violating_txs, viol_pct)
-                } else {
-                    "0".to_string()
-                };
-                (format_btc(s.total_out), format_btc_fees(s.total_fee), format!("{:.0}%", pct), color, bip110_str, bc)
+                let vc = if s.bip110_violating_txs == 0 { Color::Green } else if viol_pct <= 1.0 { Color::Yellow } else { Color::Red };
+                let count_str = format!("{}", s.bip110_violating_txs);
+                let pct_str = if s.bip110_violating_txs > 0 { format!("{:.1}%", viol_pct) } else { String::new() };
+                (format_btc(s.total_out), format_btc_fees(s.total_fee), format!("{:.0}%", pct), color, count_str, pct_str, vc)
             } else {
-                ("-".to_string(), "-".to_string(), "-".to_string(), Color::DarkGray, "-".to_string(), Color::DarkGray)
+                ("-".to_string(), "-".to_string(), "-".to_string(), Color::DarkGray, "-".to_string(), String::new(), Color::DarkGray)
             };
 
             let timestamp = if b.time > 0 {
@@ -692,7 +703,8 @@ fn draw_blocks_table(f: &mut Frame, area: Rect, data: &NodeData, block_stats: &H
                 Cell::from(btc_out),
                 Cell::from(fees),
                 Cell::from(Span::styled(financial, Style::default().fg(fin_color))),
-                Cell::from(Span::styled(bip110_str, Style::default().fg(bip110_color))),
+                Cell::from(Line::from(Span::styled(viol_count, Style::default().fg(viol_color))).alignment(Alignment::Right)),
+                Cell::from(Span::styled(viol_pct_str, Style::default().fg(viol_color))),
             ])
         })
         .collect();
@@ -709,7 +721,8 @@ fn draw_blocks_table(f: &mut Frame, area: Rect, data: &NodeData, block_stats: &H
         Constraint::Length(12), // BTC Out
         Constraint::Length(12), // Fees
         Constraint::Length(5),  // Fin%
-        Constraint::Min(4),    // >83B
+        Constraint::Length(5),  // !110
+        Constraint::Min(5),    // !110%
     ];
 
     let total = data.recent_blocks.len();
@@ -1821,7 +1834,7 @@ fn pct_str(n: u64, total: u64) -> String {
     if total > 0 { format!("{:.1}", n as f64 / total as f64 * 100.0) } else { "0.0".into() }
 }
 
-fn analytics_widths() -> [Constraint; 22] {
+fn analytics_widths() -> [Constraint; 23] {
     [
         Constraint::Length(10), // Date/Label
         Constraint::Length(4),  // Blks
@@ -1844,7 +1857,8 @@ fn analytics_widths() -> [Constraint; 22] {
         Constraint::Length(6),  // OPR count
         Constraint::Length(5),  // OPR %
         Constraint::Length(1),  // |
-        Constraint::Min(5),    // 110%
+        Constraint::Length(6),  // !110 count
+        Constraint::Min(5),    // !110%
     ]
 }
 
@@ -1873,7 +1887,8 @@ fn analytics_header_row() -> Row<'static> {
         Cell::from(format!("{:>6}", "OPR")).style(hdr_detail),
         Cell::from("%").style(hdr_detail),
         Cell::from("|").style(Style::default().fg(Color::DarkGray)),
-        Cell::from(format!("{:>5}", "!110")).style(Style::default().fg(Color::Red).bold()),
+        Cell::from(Line::from("!110").alignment(Alignment::Right)).style(Style::default().fg(Color::Red).bold()),
+        Cell::from("!110%").style(Style::default().fg(Color::Red).bold()),
     ])
 }
 
@@ -1902,13 +1917,10 @@ fn analytics_data_row(label: &str, d: &DayAgg) -> Row<'static> {
     }
     let viol_pct = if d.txs > 0 { d.bip110_violating_txs as f64 / d.txs as f64 * 100.0 } else { 0.0 };
     let bip110_color = if d.bip110_violating_txs == 0 { Color::Green } else if viol_pct <= 1.0 { Color::Yellow } else { Color::Red };
-    let bip110_str = if d.bip110_violating_txs > 0 {
-        format!("{} ({:.1}%)", format_compact(d.bip110_violating_txs), viol_pct)
-    } else {
-        "0".to_string()
-    };
     cells.push(sep());
-    cells.push(Cell::from(bip110_str).style(Style::default().fg(bip110_color)));
+    cells.push(Cell::from(Line::from(format!("{}", format_compact(d.bip110_violating_txs))).alignment(Alignment::Right)).style(Style::default().fg(bip110_color)));
+    let pct_cell = if d.bip110_violating_txs > 0 { format!("{:.1}%", viol_pct) } else { String::new() };
+    cells.push(Cell::from(pct_cell).style(Style::default().fg(bip110_color)));
     Row::new(cells)
 }
 
