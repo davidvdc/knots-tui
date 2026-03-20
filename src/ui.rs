@@ -159,15 +159,14 @@ fn draw_ibd_screen(f: &mut Frame, area: Rect, data: &NodeData, peer_scroll: u16,
         ]),
     ];
 
-    // System stats box height
+    // System stats box height (1 core per line)
     let has_sys = !sys.cpus.is_empty() || sys.mem.total > 0;
-    let cpu_lines = (sys.cpus.len() + 1) / 2;
     let has_swap = sys.mem.swap_total > 0;
     let disk_lines = sys.disks.len().min(8);
     let mem_lines = if sys.mem.total > 0 { 1 } else { 0 };
     let swap_lines = if has_swap { 1 } else { 0 };
     let sys_height = if has_sys {
-        (cpu_lines + mem_lines + swap_lines + disk_lines + 2) as u16
+        (sys.cpus.len() + mem_lines + swap_lines + disk_lines + 2) as u16
     } else {
         0
     };
@@ -206,123 +205,113 @@ fn draw_system_box(f: &mut Frame, area: Rect, sys: &SystemStats) {
     f.render_widget(block, area);
 
     let available_w = inner.width as usize;
-    let mut lines: Vec<Line> = Vec::new();
 
-    // CPU bars: 2 per row
-    // Each bar: "{label}[{bar_content}]" where label is 2-char right-aligned core number
-    // Two bars per line: " LL[...] LL[...]"
-    // Per bar overhead: space(1) + label(2) + '[' + ']' = 5
-    // Two bars: 5 + inner + 1 + 5 + inner = 11 + 2*inner
-    let bar_inner = if available_w > 11 {
-        (available_w - 11) / 2
+    // Label column: right-aligned, width = max(3, digits for highest core number)
+    // "Mem" and "Swp" are 3 chars, core numbers could be wider for >=1000 cores
+    let label_w = if sys.cpus.is_empty() {
+        3
     } else {
-        10
+        format!("{}", sys.cpus.len() - 1).len().max(3)
     };
 
-    for pair in sys.cpus.chunks(2) {
-        let mut spans: Vec<Span> = Vec::new();
-        for (i_in_pair, cpu) in pair.iter().enumerate() {
-            let core_idx = lines.len() * 2 + i_in_pair;
-            let total_pct = (cpu.nice_pct + cpu.user_pct + cpu.system_pct + cpu.iowait_pct).min(100.0);
-            let pct_text = format!("{:3.0}%", total_pct);
-            let pct_len = pct_text.len();
-            let bar_area = bar_inner.saturating_sub(pct_len);
+    // Pre-compute info strings to find max width for right-aligned info after ]
+    let cpu_infos: Vec<String> = sys.cpus.iter().map(|cpu| {
+        let total = (cpu.nice_pct + cpu.user_pct + cpu.system_pct + cpu.iowait_pct).min(100.0);
+        format!("{:.0}%", total)
+    }).collect();
+    let mem_info = if sys.mem.total > 0 {
+        format!("{}/{}", format_bytes_short(sys.mem.used + sys.mem.buffers + sys.mem.cached), format_bytes_short(sys.mem.total))
+    } else {
+        String::new()
+    };
+    let swp_info = if sys.mem.swap_total > 0 {
+        format!("{}/{}", format_bytes_short(sys.mem.swap_used), format_bytes_short(sys.mem.swap_total))
+    } else {
+        String::new()
+    };
+    let max_info = cpu_infos.iter().map(|s| s.len())
+        .chain(std::iter::once(mem_info.len()))
+        .chain(std::iter::once(swp_info.len()))
+        .max()
+        .unwrap_or(4);
 
-            // Compute char counts using cumulative rounding
-            let nice_end = (cpu.nice_pct / 100.0 * bar_area as f32).round() as usize;
-            let user_end = ((cpu.nice_pct + cpu.user_pct) / 100.0 * bar_area as f32).round() as usize;
-            let sys_end = ((cpu.nice_pct + cpu.user_pct + cpu.system_pct) / 100.0 * bar_area as f32).round() as usize;
-            let iow_end = (total_pct / 100.0 * bar_area as f32).round() as usize;
+    // Layout per line: " {label:>label_w}[{bar}] {info:>max_info}"
+    // overhead = 1(pad) + label_w + 1([) + 1(]) + 1(space) + max_info
+    let bar_w = available_w.saturating_sub(4 + label_w + max_info).max(10);
 
-            let nice_c = nice_end.min(bar_area);
-            let user_c = user_end.min(bar_area).saturating_sub(nice_c);
-            let sys_c = sys_end.min(bar_area).saturating_sub(nice_c + user_c);
-            let iow_c = iow_end.min(bar_area).saturating_sub(nice_c + user_c + sys_c);
-            let empty_c = bar_area.saturating_sub(nice_c + user_c + sys_c + iow_c);
+    let mut lines: Vec<Line> = Vec::new();
 
-            if i_in_pair > 0 {
-                spans.push(Span::raw(" "));
-            }
-            spans.push(Span::styled(format!("{:>2}", core_idx), Style::default().fg(Color::Cyan)));
-            spans.push(Span::styled("[", Style::default().fg(Color::DarkGray)));
-            if nice_c > 0 {
-                spans.push(Span::styled("|".repeat(nice_c), Style::default().fg(Color::Blue)));
-            }
-            if user_c > 0 {
-                spans.push(Span::styled("|".repeat(user_c), Style::default().fg(Color::Green)));
-            }
-            if sys_c > 0 {
-                spans.push(Span::styled("|".repeat(sys_c), Style::default().fg(Color::Red)));
-            }
-            if iow_c > 0 {
-                spans.push(Span::styled("|".repeat(iow_c), Style::default().fg(Color::DarkGray)));
-            }
-            spans.push(Span::raw(" ".repeat(empty_c)));
-            spans.push(Span::styled(pct_text, Style::default().fg(Color::White)));
-            spans.push(Span::styled("]", Style::default().fg(Color::DarkGray)));
-        }
+    // CPU bars: 1 per line
+    for (i, cpu) in sys.cpus.iter().enumerate() {
+        let total_pct = (cpu.nice_pct + cpu.user_pct + cpu.system_pct + cpu.iowait_pct).min(100.0);
+
+        let nice_end = (cpu.nice_pct / 100.0 * bar_w as f32).round() as usize;
+        let user_end = ((cpu.nice_pct + cpu.user_pct) / 100.0 * bar_w as f32).round() as usize;
+        let sys_end = ((cpu.nice_pct + cpu.user_pct + cpu.system_pct) / 100.0 * bar_w as f32).round() as usize;
+        let iow_end = (total_pct / 100.0 * bar_w as f32).round() as usize;
+
+        let nice_c = nice_end.min(bar_w);
+        let user_c = user_end.min(bar_w).saturating_sub(nice_c);
+        let sys_c = sys_end.min(bar_w).saturating_sub(nice_c + user_c);
+        let iow_c = iow_end.min(bar_w).saturating_sub(nice_c + user_c + sys_c);
+        let empty_c = bar_w.saturating_sub(nice_c + user_c + sys_c + iow_c);
+
+        let mut spans = vec![
+            Span::styled(format!(" {:>w$}", i, w = label_w), Style::default().fg(Color::Cyan)),
+            Span::styled("[", Style::default().fg(Color::DarkGray)),
+        ];
+        if nice_c > 0 { spans.push(Span::styled("|".repeat(nice_c), Style::default().fg(Color::Blue))); }
+        if user_c > 0 { spans.push(Span::styled("|".repeat(user_c), Style::default().fg(Color::Green))); }
+        if sys_c > 0 { spans.push(Span::styled("|".repeat(sys_c), Style::default().fg(Color::Red))); }
+        if iow_c > 0 { spans.push(Span::styled("|".repeat(iow_c), Style::default().fg(Color::DarkGray))); }
+        spans.push(Span::raw(" ".repeat(empty_c)));
+        spans.push(Span::styled("]", Style::default().fg(Color::DarkGray)));
+        spans.push(Span::styled(format!(" {:>w$}", &cpu_infos[i], w = max_info), Style::default().fg(Color::White)));
         lines.push(Line::from(spans));
     }
 
     // Memory bar
     if sys.mem.total > 0 {
-        let label = "Mem";
-        let info = format!("{}/{}", format_bytes_short(sys.mem.used + sys.mem.buffers + sys.mem.cached), format_bytes_short(sys.mem.total));
-        let overhead = label.len() + 1 + 1 + info.len(); // "Mem" + "[" + "]" + info
-        let bar_area = available_w.saturating_sub(overhead + 1); // +1 for leading space
-
-        let used_c = if sys.mem.total > 0 { (sys.mem.used as f64 / sys.mem.total as f64 * bar_area as f64).round() as usize } else { 0 };
-        let buf_c = if sys.mem.total > 0 { (sys.mem.buffers as f64 / sys.mem.total as f64 * bar_area as f64).round() as usize } else { 0 };
-        let cache_c = if sys.mem.total > 0 { (sys.mem.cached as f64 / sys.mem.total as f64 * bar_area as f64).round() as usize } else { 0 };
-        let filled = (used_c + buf_c + cache_c).min(bar_area);
-        let empty = bar_area.saturating_sub(filled);
+        let used_c = (sys.mem.used as f64 / sys.mem.total as f64 * bar_w as f64).round() as usize;
+        let buf_c = (sys.mem.buffers as f64 / sys.mem.total as f64 * bar_w as f64).round() as usize;
+        let cache_c = (sys.mem.cached as f64 / sys.mem.total as f64 * bar_w as f64).round() as usize;
+        let filled = (used_c + buf_c + cache_c).min(bar_w);
+        let empty = bar_w.saturating_sub(filled);
 
         let mut spans = vec![
-            Span::styled(format!(" {}", label), Style::default().fg(Color::Cyan)),
+            Span::styled(format!(" {:>w$}", "Mem", w = label_w), Style::default().fg(Color::Cyan)),
             Span::styled("[", Style::default().fg(Color::DarkGray)),
         ];
-        if used_c > 0 {
-            spans.push(Span::styled("|".repeat(used_c), Style::default().fg(Color::Green)));
-        }
-        if buf_c > 0 {
-            spans.push(Span::styled("|".repeat(buf_c), Style::default().fg(Color::Blue)));
-        }
-        if cache_c > 0 {
-            spans.push(Span::styled("|".repeat(cache_c), Style::default().fg(Color::Yellow)));
-        }
+        if used_c > 0 { spans.push(Span::styled("|".repeat(used_c), Style::default().fg(Color::Green))); }
+        if buf_c > 0 { spans.push(Span::styled("|".repeat(buf_c), Style::default().fg(Color::Blue))); }
+        if cache_c > 0 { spans.push(Span::styled("|".repeat(cache_c), Style::default().fg(Color::Yellow))); }
         spans.push(Span::raw(" ".repeat(empty)));
-        spans.push(Span::styled(info, Style::default().fg(Color::White)));
         spans.push(Span::styled("]", Style::default().fg(Color::DarkGray)));
+        spans.push(Span::styled(format!(" {:>w$}", &mem_info, w = max_info), Style::default().fg(Color::White)));
         lines.push(Line::from(spans));
     }
 
     // Swap bar
     if sys.mem.swap_total > 0 {
-        let label = "Swp";
-        let info = format!("{}/{}", format_bytes_short(sys.mem.swap_used), format_bytes_short(sys.mem.swap_total));
-        let overhead = label.len() + 1 + 1 + info.len();
-        let bar_area = available_w.saturating_sub(overhead + 1);
-
-        let used_c = if sys.mem.swap_total > 0 { (sys.mem.swap_used as f64 / sys.mem.swap_total as f64 * bar_area as f64).round() as usize } else { 0 };
-        let empty = bar_area.saturating_sub(used_c);
+        let used_c = (sys.mem.swap_used as f64 / sys.mem.swap_total as f64 * bar_w as f64).round() as usize;
+        let empty = bar_w.saturating_sub(used_c);
 
         let mut spans = vec![
-            Span::styled(format!(" {}", label), Style::default().fg(Color::Cyan)),
+            Span::styled(format!(" {:>w$}", "Swp", w = label_w), Style::default().fg(Color::Cyan)),
             Span::styled("[", Style::default().fg(Color::DarkGray)),
         ];
-        if used_c > 0 {
-            spans.push(Span::styled("|".repeat(used_c), Style::default().fg(Color::Red)));
-        }
+        if used_c > 0 { spans.push(Span::styled("|".repeat(used_c), Style::default().fg(Color::Red))); }
         spans.push(Span::raw(" ".repeat(empty)));
-        spans.push(Span::styled(info, Style::default().fg(Color::White)));
         spans.push(Span::styled("]", Style::default().fg(Color::DarkGray)));
+        spans.push(Span::styled(format!(" {:>w$}", &swp_info, w = max_info), Style::default().fg(Color::White)));
         lines.push(Line::from(spans));
     }
 
     // Disk I/O per device
+    let disk_name_w = sys.disks.iter().take(8).map(|d| d.name.len()).max().unwrap_or(3).max(label_w);
     for disk in sys.disks.iter().take(8) {
         let spans = vec![
-            Span::styled(format!(" {:>8}", disk.name), Style::default().fg(Color::Cyan)),
+            Span::styled(format!(" {:>w$}", disk.name, w = disk_name_w), Style::default().fg(Color::Cyan)),
             Span::styled("  R ", Style::default().fg(Color::DarkGray)),
             Span::styled(format!("{:>9}/s", format_bytes_short(disk.read_per_sec)), Style::default().fg(Color::Green)),
             Span::styled("  W ", Style::default().fg(Color::DarkGray)),
