@@ -363,8 +363,8 @@ async fn main() -> anyhow::Result<()> {
                         // then start unified backfill for recent blocks + analytics range
                         backfill_started = true;
                         let mut loaded = load_stats_from_file();
-                        let had_incomplete = loaded.iter().any(|s| s.total_vsize == 0);
-                        loaded.retain(|s| s.total_vsize > 0);
+                        let had_incomplete = loaded.iter().any(|s| s.total_vsize == 0 || !s.bip110_checked);
+                        loaded.retain(|s| s.total_vsize > 0 && s.bip110_checked);
                         if had_incomplete {
                             rewrite_stats_file(&loaded);
                         }

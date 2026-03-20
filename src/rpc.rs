@@ -402,6 +402,7 @@ pub fn classify_block(txs: &[Value], total_out: u64, total_fee: u64, height: u64
         max_opreturn_size,
         taproot_spend_count,
         taproot_output_count,
+        bip110_checked: true,
         bip110_oversized_spk,
         bip110_oversized_pushdata,
         bip110_op_success,
@@ -698,6 +699,7 @@ pub struct BlockStats {
     pub taproot_spend_count: usize,  // txs spending from taproot inputs
     pub taproot_output_count: usize, // txs creating taproot outputs
     // BIP-110 violation counts (txs violating each rule):
+    #[serde(default)] pub bip110_checked: bool,               // true if BIP-110 analysis was performed
     #[serde(default)] pub bip110_oversized_spk: usize,      // scriptPubKey > 34 bytes (excl nulldata)
     #[serde(default)] pub bip110_oversized_pushdata: usize,  // witness element > 256 bytes
     #[serde(default)] pub bip110_op_success: usize,          // OP_SUCCESS in tapscript
@@ -1155,6 +1157,7 @@ mod tests {
             max_opreturn_size: 200,
             taproot_spend_count: 100,
             taproot_output_count: 150,
+            bip110_checked: true,
             bip110_oversized_spk: 0,
             bip110_oversized_pushdata: 0,
             bip110_op_success: 0,
