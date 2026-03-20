@@ -635,7 +635,7 @@ fn draw_blocks_table(f: &mut Frame, area: Rect, data: &NodeData, block_stats: &H
         Cell::from("Fees"),
         Cell::from("Fin%"),
         Cell::from(Line::from("!110").alignment(Alignment::Right)),
-        Cell::from("!110%"),
+        Cell::from("%"),
     ])
         .style(Style::default().fg(Color::Cyan).bold())
         .bottom_margin(0);
@@ -1888,7 +1888,7 @@ fn analytics_header_row() -> Row<'static> {
         Cell::from("%").style(hdr_detail),
         Cell::from("|").style(Style::default().fg(Color::DarkGray)),
         Cell::from(Line::from("!110").alignment(Alignment::Right)).style(Style::default().fg(Color::Red).bold()),
-        Cell::from("!110%").style(Style::default().fg(Color::Red).bold()),
+        Cell::from("%").style(Style::default().fg(Color::Red).bold()),
     ])
 }
 
