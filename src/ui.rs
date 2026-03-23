@@ -1670,17 +1670,17 @@ fn draw_block_modal(f: &mut Frame, area: Rect, block: &BlockInfo, stats: &BlockS
         if count > 0 { Color::Red } else { Color::Green }
     };
 
-    // Protocol rows: (label, count, vsize, description)
-    let protocols: Vec<(&str, usize, u64, &str)> = vec![
-        ("Runes",          stats.rune_count,          stats.rune_vsize,          "fungible tokens via OP_RETURN"),
-        ("BRC-20",         stats.brc20_count,         stats.brc20_vsize,         "token standard via ordinals"),
-        ("Inscriptions",   stats.inscription_count,   stats.inscription_vsize,   "ordinals data (images, text, etc.)"),
-        ("OPNET",          stats.opnet_count,          stats.opnet_vsize,         "smart contracts via tapscript"),
-        ("Stamps",         stats.stamp_count,          stats.stamp_vsize,         "SRC-20 tokens via bare multisig"),
-        ("Counterparty",   stats.counterparty_count,   stats.counterparty_vsize,  "asset protocol (XCP)"),
-        ("Omni Layer",     stats.omni_count,           stats.omni_vsize,          "token layer (ex-Mastercoin)"),
-        ("OP_RETURN other", stats.opreturn_other_count, stats.opreturn_other_vsize, "unclassified nulldata"),
-        ("Other",          stats.other_data_count,     stats.other_data_vsize,    "data tx, unknown protocol"),
+    // Protocol rows: (label, count, vsize, bip110_violations, description)
+    let protocols: Vec<(&str, usize, u64, usize, &str)> = vec![
+        ("Runes",          stats.rune_count,          stats.rune_vsize,          stats.rune_bip110v,          "fungible tokens via OP_RETURN"),
+        ("BRC-20",         stats.brc20_count,         stats.brc20_vsize,         stats.brc20_bip110v,         "token standard via ordinals"),
+        ("Inscriptions",   stats.inscription_count,   stats.inscription_vsize,   stats.inscription_bip110v,   "ordinals data (images, text, etc.)"),
+        ("OPNET",          stats.opnet_count,          stats.opnet_vsize,         stats.opnet_bip110v,         "smart contracts via tapscript"),
+        ("Stamps",         stats.stamp_count,          stats.stamp_vsize,         stats.stamp_bip110v,         "SRC-20 tokens via bare multisig"),
+        ("Counterparty",   stats.counterparty_count,   stats.counterparty_vsize,  stats.counterparty_bip110v,  "asset protocol (XCP)"),
+        ("Omni Layer",     stats.omni_count,           stats.omni_vsize,          stats.omni_bip110v,          "token layer (ex-Mastercoin)"),
+        ("OP_RETURN other", stats.opreturn_other_count, stats.opreturn_other_vsize, stats.opreturn_other_bip110v, "unclassified nulldata"),
+        ("Other",          stats.other_data_count,     stats.other_data_vsize,    0,                           "data tx, unknown protocol"),
     ];
 
     let mut text = vec![
@@ -1716,6 +1716,14 @@ fn draw_block_modal(f: &mut Frame, area: Rect, block: &BlockInfo, stats: &BlockS
                 format!("  {:>5}% wt", format!("{:.1}", if stats.total_vsize > 0 { stats.financial_vsize as f64 / stats.total_vsize as f64 * 100.0 } else { 0.0 })),
                 Style::default().fg(Color::Green),
             ),
+            Span::styled(
+                if stats.financial_count > 0 {
+                    format!("  110:{:>6}", format!("{}/{}", stats.financial_count.saturating_sub(stats.financial_bip110v), stats.financial_count))
+                } else {
+                    "  110:     -".to_string()
+                },
+                Style::default().fg(if stats.financial_bip110v == 0 { Color::Green } else { Color::Yellow }),
+            ),
         ]),
         Line::from(vec![
             Span::styled("  Data/spam:       ", Style::default().fg(Color::DarkGray)),
@@ -1734,7 +1742,22 @@ fn draw_block_modal(f: &mut Frame, area: Rect, block: &BlockInfo, stats: &BlockS
     let vsize_pct = |vs: u64| -> f64 {
         if stats.total_vsize > 0 { (vs as f64 / stats.total_vsize as f64) * 100.0 } else { 0.0 }
     };
-    for (label, count, vsize, desc) in &protocols {
+    for (label, count, vsize, violations, desc) in &protocols {
+        let compliant = count.saturating_sub(*violations);
+        let bip110_str = if *count > 0 {
+            format!("{}/{}", compliant, count)
+        } else {
+            "-".to_string()
+        };
+        let bip110_color = if *count == 0 {
+            Color::DarkGray
+        } else if *violations == 0 {
+            Color::Green
+        } else if compliant == 0 {
+            Color::Red
+        } else {
+            Color::Yellow
+        };
         text.push(Line::from(vec![
             Span::styled(format!("  {:17}", format!("{}:", label)), Style::default().fg(Color::DarkGray)),
             Span::styled(
@@ -1744,6 +1767,10 @@ fn draw_block_modal(f: &mut Frame, area: Rect, block: &BlockInfo, stats: &BlockS
             Span::styled(
                 format!("  {:>5}% wt", format!("{:.1}", vsize_pct(*vsize))),
                 Style::default().fg(proto_color(*count)),
+            ),
+            Span::styled(
+                format!("  110:{:>6}", bip110_str),
+                Style::default().fg(bip110_color),
             ),
             Span::styled(format!("  {}", desc), Style::default().fg(Color::DarkGray)),
         ]));

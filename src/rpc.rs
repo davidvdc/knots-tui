@@ -328,6 +328,15 @@ pub fn classify_block(txs: &[Value], total_out: u64, total_fee: u64, height: u64
     let mut bip110_op_success = 0usize;
     let mut bip110_op_if = 0usize;
     let mut bip110_violating_txs = 0usize;
+    let mut financial_bip110v = 0usize;
+    let mut rune_bip110v = 0usize;
+    let mut brc20_bip110v = 0usize;
+    let mut inscription_bip110v = 0usize;
+    let mut opnet_bip110v = 0usize;
+    let mut stamp_bip110v = 0usize;
+    let mut counterparty_bip110v = 0usize;
+    let mut omni_bip110v = 0usize;
+    let mut opreturn_other_bip110v = 0usize;
 
     for tx in txs {
         let c = classify_tx(tx);
@@ -358,7 +367,21 @@ pub fn classify_block(txs: &[Value], total_out: u64, total_fee: u64, height: u64
         // BIP-110 violations
         let has_any_violation = c.bip110_oversized_spk || c.bip110_oversized_pushdata
             || c.bip110_op_success || c.bip110_op_if || c.oversized_opreturn_count > 0;
-        if has_any_violation { bip110_violating_txs += 1; }
+        if has_any_violation {
+            bip110_violating_txs += 1;
+            match c.category {
+                TxCategory::Financial => financial_bip110v += 1,
+                TxCategory::Rune => rune_bip110v += 1,
+                TxCategory::Brc20 => brc20_bip110v += 1,
+                TxCategory::Inscription => inscription_bip110v += 1,
+                TxCategory::Opnet => opnet_bip110v += 1,
+                TxCategory::Stamp => stamp_bip110v += 1,
+                TxCategory::Counterparty => counterparty_bip110v += 1,
+                TxCategory::Omni => omni_bip110v += 1,
+                TxCategory::OpReturnOther => opreturn_other_bip110v += 1,
+                TxCategory::Coinbase => {}
+            }
+        }
         if c.bip110_oversized_spk { bip110_oversized_spk += 1; }
         if c.bip110_oversized_pushdata { bip110_oversized_pushdata += 1; }
         if c.bip110_op_success { bip110_op_success += 1; }
@@ -408,6 +431,16 @@ pub fn classify_block(txs: &[Value], total_out: u64, total_fee: u64, height: u64
         bip110_op_success,
         bip110_op_if,
         bip110_violating_txs,
+        bip110_per_protocol: true,
+        financial_bip110v,
+        rune_bip110v,
+        brc20_bip110v,
+        inscription_bip110v,
+        opnet_bip110v,
+        stamp_bip110v,
+        counterparty_bip110v,
+        omni_bip110v,
+        opreturn_other_bip110v,
     }
 }
 
@@ -705,6 +738,17 @@ pub struct BlockStats {
     #[serde(default)] pub bip110_op_success: usize,          // OP_SUCCESS in tapscript
     #[serde(default)] pub bip110_op_if: usize,               // OP_IF/OP_NOTIF in tapscript
     #[serde(default)] pub bip110_violating_txs: usize,       // txs with any BIP-110 violation
+    // Per-protocol BIP-110 violation counts:
+    #[serde(default)] pub bip110_per_protocol: bool,
+    #[serde(default)] pub financial_bip110v: usize,
+    #[serde(default)] pub rune_bip110v: usize,
+    #[serde(default)] pub brc20_bip110v: usize,
+    #[serde(default)] pub inscription_bip110v: usize,
+    #[serde(default)] pub opnet_bip110v: usize,
+    #[serde(default)] pub stamp_bip110v: usize,
+    #[serde(default)] pub counterparty_bip110v: usize,
+    #[serde(default)] pub omni_bip110v: usize,
+    #[serde(default)] pub opreturn_other_bip110v: usize,
 }
 
 #[derive(Deserialize)]
