@@ -4,7 +4,7 @@ use crate::{AnalyticsData, AnalyticsState, Screen};
 use ratatui::{prelude::*, widgets::*};
 use std::collections::{BTreeMap, HashMap};
 
-pub fn draw(f: &mut Frame, data: &NodeData, peer_scroll: u16, screen: Screen, selected_bit: u8, show_bit_modal: bool, rpc_spinner: u8, block_stats: &HashMap<u64, BlockStats>, selected_block: u16, block_scroll: u16, show_block_modal: bool, blocks_focused: bool, analytics: &AnalyticsData, system_stats: &SystemStats) {
+pub fn draw(f: &mut Frame, data: &NodeData, peer_scroll: u16, screen: Screen, selected_bit: u8, show_bit_modal: bool, rpc_spinner: u8, block_stats: &HashMap<u64, BlockStats>, selected_block: u16, block_scroll: u16, show_block_modal: bool, blocks_focused: bool, analytics: &AnalyticsData, system_stats: &SystemStats, chart_mode: u8) {
     let area = f.area();
 
     let outer = Layout::default()
@@ -16,13 +16,13 @@ pub fn draw(f: &mut Frame, data: &NodeData, peer_scroll: u16, screen: Screen, se
         ])
         .split(area);
 
-    draw_header(f, outer[0], data, screen);
+    draw_header(f, outer[0], data, screen, chart_mode);
     match screen {
         Screen::Dashboard => draw_body(f, outer[1], data, peer_scroll, block_stats, selected_block, block_scroll, blocks_focused, analytics, system_stats),
         Screen::KnownPeers => draw_known_peers(f, outer[1], data, peer_scroll),
         Screen::Signaling => draw_signaling(f, outer[1], data, selected_bit),
         Screen::Analytics => draw_analytics(f, outer[1], analytics),
-        Screen::Charts => draw_charts(f, outer[1], analytics),
+        Screen::Charts => draw_charts(f, outer[1], analytics, chart_mode),
     }
     draw_footer(f, outer[2], screen, rpc_spinner);
 
@@ -38,7 +38,7 @@ pub fn draw(f: &mut Frame, data: &NodeData, peer_scroll: u16, screen: Screen, se
     }
 }
 
-fn draw_header(f: &mut Frame, area: Rect, data: &NodeData, screen: Screen) {
+fn draw_header(f: &mut Frame, area: Rect, data: &NodeData, screen: Screen, chart_mode: u8) {
     let version = if !data.network.subversion.is_empty() {
         data.network.subversion.clone()
     } else {
@@ -58,7 +58,11 @@ fn draw_header(f: &mut Frame, area: Rect, data: &NodeData, screen: Screen) {
         Screen::KnownPeers => "Known Peers",
         Screen::Signaling => "Signaling",
         Screen::Analytics => "Analytics",
-        Screen::Charts => "Charts",
+        Screen::Charts => match chart_mode {
+            0 => "Charts: OPNET",
+            1 => "Charts: Data",
+            _ => "Charts: BIP-110",
+        },
     };
 
     let title = format!(
@@ -2164,12 +2168,66 @@ fn format_compact(n: u64) -> String {
     }
 }
 
-fn draw_charts(f: &mut Frame, area: Rect, analytics: &AnalyticsData) {
+fn chart_aggregate_daily(stats: &[BlockStats], extract: impl Fn(&BlockStats) -> (u64, u64)) -> Vec<(f64, f64)> {
+    let mut daily: BTreeMap<u64, (u64, u64)> = BTreeMap::new();
+    for s in stats {
+        let day = (s.time / 86400) * 86400;
+        let (num, den) = extract(s);
+        let entry = daily.entry(day).or_insert((0, 0));
+        entry.0 += num;
+        entry.1 += den;
+    }
+    daily.iter().map(|(ts, (num, den))| {
+        let pct = if *den > 0 { *num as f64 / *den as f64 * 100.0 } else { 0.0 };
+        (*ts as f64, pct)
+    }).collect()
+}
+
+fn chart_aggregate_hourly(stats: &[BlockStats], extract: impl Fn(&BlockStats) -> (u64, u64)) -> Vec<(f64, f64)> {
+    let min_time = stats.first().map(|s| s.time).unwrap_or(0);
+    let max_time = stats.last().map(|s| s.time).unwrap_or(0);
+    let start_hour = (min_time / 3600) * 3600;
+    let end_hour = ((max_time / 3600) + 1) * 3600;
+    let mut points = Vec::new();
+    let mut hour = start_hour;
+    while hour <= end_hour {
+        let window_start = hour.saturating_sub(86400);
+        let mut total_num = 0u64;
+        let mut total_den = 0u64;
+        for s in stats {
+            if s.time >= window_start && s.time <= hour {
+                let (num, den) = extract(s);
+                total_num += num;
+                total_den += den;
+            }
+        }
+        let pct = if total_den > 0 { total_num as f64 / total_den as f64 * 100.0 } else { 0.0 };
+        points.push((hour as f64, pct));
+        hour += 3600;
+    }
+    points
+}
+
+fn chart_est_bip110_vsize(s: &BlockStats) -> u64 {
+    let est = |v: usize, c: usize, vs: u64| -> u64 {
+        if c > 0 { (v as f64 / c as f64 * vs as f64) as u64 } else { 0 }
+    };
+    est(s.financial_bip110v, s.financial_count, s.financial_vsize)
+        + est(s.rune_bip110v, s.rune_count, s.rune_vsize)
+        + est(s.brc20_bip110v, s.brc20_count, s.brc20_vsize)
+        + est(s.inscription_bip110v, s.inscription_count, s.inscription_vsize)
+        + est(s.opnet_bip110v, s.opnet_count, s.opnet_vsize)
+        + est(s.stamp_bip110v, s.stamp_count, s.stamp_vsize)
+        + est(s.counterparty_bip110v, s.counterparty_count, s.counterparty_vsize)
+        + est(s.omni_bip110v, s.omni_count, s.omni_vsize)
+}
+
+fn draw_charts(f: &mut Frame, area: Rect, analytics: &AnalyticsData, chart_mode: u8) {
     if analytics.stats.is_empty() {
         let block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .title(" OPNET Charts ")
+            .title(" Charts ")
             .style(Style::default().fg(Color::Cyan));
         let text = Paragraph::new("No data available.")
             .block(block)
@@ -2178,43 +2236,52 @@ fn draw_charts(f: &mut Frame, area: Rect, analytics: &AnalyticsData) {
         return;
     }
 
-    let stats = &analytics.stats; // sorted by height
+    let stats = &analytics.stats;
 
-    // --- Top chart: Daily accumulated OPNET weight % ---
-    let mut daily: BTreeMap<u64, (u64, u64)> = BTreeMap::new(); // day_ts -> (opnet_vsize, total_vsize)
-    for s in stats {
-        let day = (s.time / 86400) * 86400;
-        let entry = daily.entry(day).or_insert((0, 0));
-        entry.0 += s.opnet_vsize;
-        entry.1 += s.total_vsize;
-    }
-    let daily_points: Vec<(f64, f64)> = daily.iter().map(|(ts, (opnet, total))| {
-        let pct = if *total > 0 { *opnet as f64 / *total as f64 * 100.0 } else { 0.0 };
-        (*ts as f64, pct)
-    }).collect();
+    // Primary metric
+    let (daily_primary, hourly_primary) = match chart_mode {
+        0 => (
+            chart_aggregate_daily(stats, |s| (s.opnet_vsize, s.total_vsize)),
+            chart_aggregate_hourly(stats, |s| (s.opnet_vsize, s.total_vsize)),
+        ),
+        1 => (
+            chart_aggregate_daily(stats, |s| (s.total_vsize.saturating_sub(s.financial_vsize), s.total_vsize)),
+            chart_aggregate_hourly(stats, |s| (s.total_vsize.saturating_sub(s.financial_vsize), s.total_vsize)),
+        ),
+        _ => (
+            chart_aggregate_daily(stats, |s| (chart_est_bip110_vsize(s), s.total_vsize)),
+            chart_aggregate_hourly(stats, |s| (chart_est_bip110_vsize(s), s.total_vsize)),
+        ),
+    };
 
-    // --- Bottom chart: Rolling 24h window, hourly resolution ---
-    let min_time = stats.first().map(|s| s.time).unwrap_or(0);
-    let max_time = stats.last().map(|s| s.time).unwrap_or(0);
-    let start_hour = (min_time / 3600) * 3600;
-    let end_hour = ((max_time / 3600) + 1) * 3600;
+    // Secondary metric (BIP-110 mode: tx count%)
+    let daily_secondary = if chart_mode == 2 {
+        chart_aggregate_daily(stats, |s| (s.bip110_violating_txs as u64, s.tx_count.saturating_sub(1) as u64))
+    } else {
+        Vec::new()
+    };
+    let hourly_secondary = if chart_mode == 2 {
+        chart_aggregate_hourly(stats, |s| (s.bip110_violating_txs as u64, s.tx_count.saturating_sub(1) as u64))
+    } else {
+        Vec::new()
+    };
 
-    let mut hourly_points: Vec<(f64, f64)> = Vec::new();
-    let mut hour = start_hour;
-    while hour <= end_hour {
-        let window_start = hour.saturating_sub(86400);
-        let mut opnet_vsize = 0u64;
-        let mut total_vsize = 0u64;
-        for s in stats {
-            if s.time >= window_start && s.time <= hour {
-                opnet_vsize += s.opnet_vsize;
-                total_vsize += s.total_vsize;
-            }
-        }
-        let pct = if total_vsize > 0 { opnet_vsize as f64 / total_vsize as f64 * 100.0 } else { 0.0 };
-        hourly_points.push((hour as f64, pct));
-        hour += 3600;
-    }
+    let num_days = daily_primary.len();
+    let (primary_label, primary_color): (&str, Color) = match chart_mode {
+        0 | 1 => ("weight%", Color::Yellow),
+        _ => ("est. weight%", Color::Red),
+    };
+
+    let top_title = match chart_mode {
+        0 => format!(" OPNET % of Block Weight — daily ({} days) ", num_days),
+        1 => format!(" Data % of Block Weight — daily ({} days) ", num_days),
+        _ => format!(" BIP-110 Non-Compliant — daily ({} days) ", num_days),
+    };
+    let bottom_title = match chart_mode {
+        0 => " OPNET % of Block Weight — 24h Rolling Window (hourly) ",
+        1 => " Data % of Block Weight — 24h Rolling Window (hourly) ",
+        _ => " BIP-110 Non-Compliant — 24h Rolling Window (hourly) ",
+    };
 
     // Helpers
     let fmt_date = |ts: f64| -> String {
@@ -2231,37 +2298,57 @@ fn draw_charts(f: &mut Frame, area: Rect, analytics: &AnalyticsData) {
     };
 
     // Top chart bounds
-    let d_min = daily_points.first().map(|(x, _)| *x).unwrap_or(0.0);
-    let d_max = daily_points.last().map(|(x, _)| *x).unwrap_or(1.0);
+    let d_min = daily_primary.first().map(|(x, _)| *x).unwrap_or(0.0);
+    let d_max = daily_primary.last().map(|(x, _)| *x).unwrap_or(1.0);
     let d_range = if (d_max - d_min).abs() < 1.0 { [d_min - 86400.0, d_max + 86400.0] } else { [d_min, d_max] };
     let d_mid = (d_min + d_max) / 2.0;
-    let d_y_top = (daily_points.iter().map(|(_, y)| *y).fold(0.0f64, f64::max) * 1.1).max(0.5);
+    let mut d_y_max = daily_primary.iter().map(|(_, y)| *y).fold(0.0f64, f64::max);
+    if !daily_secondary.is_empty() {
+        d_y_max = d_y_max.max(daily_secondary.iter().map(|(_, y)| *y).fold(0.0f64, f64::max));
+    }
+    let d_y_top = (d_y_max * 1.1).max(0.5);
 
     // Bottom chart bounds
-    let h_min = hourly_points.first().map(|(x, _)| *x).unwrap_or(0.0);
-    let h_max = hourly_points.last().map(|(x, _)| *x).unwrap_or(1.0);
+    let h_min = hourly_primary.first().map(|(x, _)| *x).unwrap_or(0.0);
+    let h_max = hourly_primary.last().map(|(x, _)| *x).unwrap_or(1.0);
     let h_range = if (h_max - h_min).abs() < 1.0 { [h_min - 3600.0, h_max + 3600.0] } else { [h_min, h_max] };
     let h_mid = (h_min + h_max) / 2.0;
-    let h_y_top = (hourly_points.iter().map(|(_, y)| *y).fold(0.0f64, f64::max) * 1.1).max(0.5);
+    let mut h_y_max = hourly_primary.iter().map(|(_, y)| *y).fold(0.0f64, f64::max);
+    if !hourly_secondary.is_empty() {
+        h_y_max = h_y_max.max(hourly_secondary.iter().map(|(_, y)| *y).fold(0.0f64, f64::max));
+    }
+    let h_y_top = (h_y_max * 1.1).max(0.5);
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(area);
 
-    // Top: Daily OPNET %
-    let dataset_daily = Dataset::default()
-        .name("Daily %")
-        .marker(symbols::Marker::Braille)
-        .graph_type(GraphType::Line)
-        .style(Style::default().fg(Color::Yellow))
-        .data(&daily_points);
+    // Top chart datasets
+    let mut top_datasets = vec![
+        Dataset::default()
+            .name(primary_label)
+            .marker(symbols::Marker::Braille)
+            .graph_type(GraphType::Line)
+            .style(Style::default().fg(primary_color))
+            .data(&daily_primary),
+    ];
+    if !daily_secondary.is_empty() {
+        top_datasets.push(
+            Dataset::default()
+                .name("tx count%")
+                .marker(symbols::Marker::Braille)
+                .graph_type(GraphType::Line)
+                .style(Style::default().fg(Color::Cyan))
+                .data(&daily_secondary),
+        );
+    }
 
-    let chart_top = Chart::new(vec![dataset_daily])
+    let chart_top = Chart::new(top_datasets)
         .block(Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .title(format!(" OPNET % of Block Weight — daily ({} days) ", daily.len()))
+            .title(top_title)
             .style(Style::default().fg(Color::Cyan)))
         .x_axis(Axis::default()
             .style(Style::default().fg(Color::DarkGray))
@@ -2279,19 +2366,31 @@ fn draw_charts(f: &mut Frame, area: Rect, analytics: &AnalyticsData) {
 
     f.render_widget(chart_top, chunks[0]);
 
-    // Bottom: Rolling 24h window (hourly)
-    let dataset_hourly = Dataset::default()
-        .name("24h rolling %")
-        .marker(symbols::Marker::Braille)
-        .graph_type(GraphType::Line)
-        .style(Style::default().fg(Color::Green))
-        .data(&hourly_points);
+    // Bottom chart datasets
+    let mut bottom_datasets = vec![
+        Dataset::default()
+            .name(primary_label)
+            .marker(symbols::Marker::Braille)
+            .graph_type(GraphType::Line)
+            .style(Style::default().fg(primary_color))
+            .data(&hourly_primary),
+    ];
+    if !hourly_secondary.is_empty() {
+        bottom_datasets.push(
+            Dataset::default()
+                .name("tx count%")
+                .marker(symbols::Marker::Braille)
+                .graph_type(GraphType::Line)
+                .style(Style::default().fg(Color::Cyan))
+                .data(&hourly_secondary),
+        );
+    }
 
-    let chart_bottom = Chart::new(vec![dataset_hourly])
+    let chart_bottom = Chart::new(bottom_datasets)
         .block(Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .title(" OPNET % of Block Weight — 24h Rolling Window (hourly) ")
+            .title(bottom_title)
             .style(Style::default().fg(Color::Cyan)))
         .x_axis(Axis::default()
             .style(Style::default().fg(Color::DarkGray))
@@ -2316,7 +2415,7 @@ fn draw_footer(f: &mut Frame, area: Rect, screen: Screen, rpc_spinner: u8) {
         Screen::KnownPeers => " q: quit | Tab: signaling | ↑/↓: scroll services | r: refresh ",
         Screen::Signaling => " q: quit | Tab: analytics | ↑/↓: select bit | Enter: details | r: refresh ",
         Screen::Analytics => " q: quit | Tab: charts | ↑/↓: scroll | +: extend 30 days | Esc: stop ",
-        Screen::Charts => " q: quit | Tab: dashboard ",
+        Screen::Charts => " q: quit | Tab: dashboard | j/k: switch metric ",
     };
 
     const SPINNER: &[&str] = &[".  ", ".. ", "...", " ..", "  .", "   "];

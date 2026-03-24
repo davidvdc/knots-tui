@@ -351,6 +351,7 @@ async fn main() -> anyhow::Result<()> {
         depth: 4320,
     };
     let mut system_stats = SystemStats::default();
+    let mut chart_mode: u8 = 0;
     let mut backfill_started = false;
     let mut prev_ibd_height: u64 = 0;
     let mut prev_ibd_bytes_recv: u64 = 0;
@@ -359,7 +360,7 @@ async fn main() -> anyhow::Result<()> {
     let mut event_stream = EventStream::new();
 
     // Initial render
-    terminal.draw(|f| ui::draw(f, &node_data, peer_scroll, screen, selected_bit, show_bit_modal, rpc_spinner, &block_stats_cache, selected_block, block_scroll, show_block_modal, blocks_focused, &analytics, &system_stats))?;
+    terminal.draw(|f| ui::draw(f, &node_data, peer_scroll, screen, selected_bit, show_bit_modal, rpc_spinner, &block_stats_cache, selected_block, block_scroll, show_block_modal, blocks_focused, &analytics, &system_stats, chart_mode))?;
 
     loop {
         let mut redraw = false;
@@ -645,6 +646,12 @@ async fn main() -> anyhow::Result<()> {
                                 KeyCode::Char('j') | KeyCode::Char('k') => {
                                     if screen == Screen::Dashboard {
                                         blocks_focused = !blocks_focused;
+                                    } else if screen == Screen::Charts {
+                                        if key.code == KeyCode::Char('j') {
+                                            chart_mode = (chart_mode + 1) % 3;
+                                        } else {
+                                            chart_mode = chart_mode.checked_sub(1).unwrap_or(2);
+                                        }
                                     }
                                 }
                                 KeyCode::Enter => {
@@ -707,7 +714,7 @@ async fn main() -> anyhow::Result<()> {
             } else {
                 &node_data
             };
-            terminal.draw(|f| ui::draw(f, draw_data, peer_scroll, screen, selected_bit, show_bit_modal, rpc_spinner, &block_stats_cache, selected_block, block_scroll, show_block_modal, blocks_focused, &analytics, &system_stats))?;
+            terminal.draw(|f| ui::draw(f, draw_data, peer_scroll, screen, selected_bit, show_bit_modal, rpc_spinner, &block_stats_cache, selected_block, block_scroll, show_block_modal, blocks_focused, &analytics, &system_stats, chart_mode))?;
         }
     }
 
