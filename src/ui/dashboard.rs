@@ -430,11 +430,9 @@ fn draw_system_card(f: &mut Frame, area: Rect, sys: &SystemStats, uses_tor: bool
     }
 
     // Disk IO
-    let disk_r: u64 = sys.disks.iter().map(|d| d.read_per_sec).sum();
-    let disk_w: u64 = sys.disks.iter().map(|d| d.write_per_sec).sum();
-    // Disk IO as column table: drives as columns, R/W as rows
     let disks: Vec<&crate::sys::DiskIO> = sys.disks.iter().take(4).collect();
     if !disks.is_empty() {
+        lines.push(Line::from(""));
         let dw = 6usize;
         let mut hdr = vec![Span::styled("    ", gray)];
         for d in &disks { hdr.push(Span::styled(format!("{:>dw$}", d.name), Style::default().fg(Color::Cyan))); }
