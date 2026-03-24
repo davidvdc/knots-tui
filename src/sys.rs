@@ -27,10 +27,18 @@ pub struct DiskIO {
 }
 
 #[derive(Clone, Default)]
+pub struct ProcessStats {
+    pub found: bool,
+    pub cpu_pct: f32,
+    pub rss: u64, // bytes
+}
+
+#[derive(Clone, Default)]
 pub struct SystemStats {
     pub cpus: Vec<CpuUsage>,
     pub mem: MemUsage,
     pub disks: Vec<DiskIO>,
+    pub bitcoind: ProcessStats,
 }
 
 struct CpuSample {
@@ -56,17 +64,27 @@ struct DiskSample {
     sectors_written: u64,
 }
 
+struct ProcSample {
+    pid: u32,
+    utime: u64,
+    stime: u64,
+}
+
 pub struct SystemSampler {
     prev_cpus: Vec<CpuSample>,
     prev_disks: HashMap<String, DiskSample>,
+    prev_proc: Option<ProcSample>,
     prev_time: Instant,
 }
 
 impl SystemSampler {
     pub fn new() -> Self {
+        let pid = find_bitcoind_pid();
+        let prev_proc = pid.and_then(read_proc_cpu);
         Self {
             prev_cpus: read_cpu_samples(),
             prev_disks: read_disk_samples(),
+            prev_proc,
             prev_time: Instant::now(),
         }
     }
@@ -136,11 +154,31 @@ impl SystemSampler {
             .collect();
         disks.sort_by(|a, b| a.name.cmp(&b.name));
 
+        // Bitcoind process stats
+        let pid = self.prev_proc.as_ref().map(|p| p.pid).or_else(find_bitcoind_pid);
+        let curr_proc = pid.and_then(read_proc_cpu);
+        let bitcoind = match (&self.prev_proc, &curr_proc) {
+            (Some(prev), Some(curr)) if prev.pid == curr.pid => {
+                let clk_tck = 100.0; // sysconf(_SC_CLK_TCK), almost always 100 on Linux
+                let d_utime = curr.utime.saturating_sub(prev.utime) as f64;
+                let d_stime = curr.stime.saturating_sub(prev.stime) as f64;
+                let cpu_pct = ((d_utime + d_stime) / clk_tck / dt * 100.0) as f32;
+                let rss = read_proc_rss(curr.pid);
+                ProcessStats { found: true, cpu_pct, rss }
+            }
+            (None, Some(curr)) => {
+                let rss = read_proc_rss(curr.pid);
+                ProcessStats { found: true, cpu_pct: 0.0, rss }
+            }
+            _ => ProcessStats::default(),
+        };
+        self.prev_proc = curr_proc;
+
         self.prev_cpus = curr_cpus;
         self.prev_disks = curr_disks;
         self.prev_time = now;
 
-        SystemStats { cpus, mem, disks }
+        SystemStats { cpus, mem, disks, bitcoind }
     }
 }
 
@@ -235,4 +273,56 @@ fn read_disk_samples() -> HashMap<String, DiskSample> {
         }
     }
     samples
+}
+
+/// Find the PID of a running bitcoind/bitcoin-qt process by scanning /proc/*/comm
+fn find_bitcoind_pid() -> Option<u32> {
+    let proc_dir = match std::fs::read_dir("/proc") {
+        Ok(d) => d,
+        Err(_) => return None,
+    };
+    for entry in proc_dir.flatten() {
+        let name = entry.file_name();
+        let name_str = name.to_str().unwrap_or("");
+        if name_str.chars().all(|c| c.is_ascii_digit()) {
+            let comm_path = entry.path().join("comm");
+            if let Ok(comm) = std::fs::read_to_string(&comm_path) {
+                let comm = comm.trim();
+                if comm == "bitcoind" || comm == "bitcoin-qt" {
+                    if let Ok(pid) = name_str.parse::<u32>() {
+                        return Some(pid);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Read utime + stime from /proc/[pid]/stat (fields 14 and 15, 1-indexed)
+fn read_proc_cpu(pid: u32) -> Option<ProcSample> {
+    let content = std::fs::read_to_string(format!("/proc/{}/stat", pid)).ok()?;
+    // Fields after the comm (which is in parens and may contain spaces)
+    let after_comm = content.rfind(')')? + 2;
+    let fields: Vec<&str> = content[after_comm..].split_whitespace().collect();
+    // fields[0] = state, fields[11] = utime (14th overall), fields[12] = stime (15th overall)
+    if fields.len() < 13 { return None; }
+    let utime: u64 = fields[11].parse().ok()?;
+    let stime: u64 = fields[12].parse().ok()?;
+    Some(ProcSample { pid, utime, stime })
+}
+
+/// Read RSS from /proc/[pid]/statm (field 2, in pages)
+fn read_proc_rss(pid: u32) -> u64 {
+    let content = match std::fs::read_to_string(format!("/proc/{}/statm", pid)) {
+        Ok(c) => c,
+        Err(_) => return 0,
+    };
+    let fields: Vec<&str> = content.split_whitespace().collect();
+    if fields.len() >= 2 {
+        let pages: u64 = fields[1].parse().unwrap_or(0);
+        pages * 4096 // page size
+    } else {
+        0
+    }
 }

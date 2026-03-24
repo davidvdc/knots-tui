@@ -379,8 +379,6 @@ fn draw_system_card(f: &mut Frame, area: Rect, sys: &SystemStats) {
     let mem_used = sys.mem.used + sys.mem.buffers + sys.mem.cached;
     let mem_pct = if sys.mem.total > 0 { mem_used as f64 / sys.mem.total as f64 * 100.0 } else { 0.0 };
 
-    let swap_pct = if sys.mem.swap_total > 0 { sys.mem.swap_used as f64 / sys.mem.swap_total as f64 * 100.0 } else { 0.0 };
-
     let disk_r: u64 = sys.disks.iter().map(|d| d.read_per_sec).sum();
     let disk_w: u64 = sys.disks.iter().map(|d| d.write_per_sec).sum();
 
@@ -398,29 +396,22 @@ fn draw_system_card(f: &mut Frame, area: Rect, sys: &SystemStats) {
             Span::styled(format!("{}/{}", format_bytes_short(mem_used), format_bytes_short(sys.mem.total)), Style::default().fg(mem_color)),
             Span::styled(format!(" ({:.0}%)", mem_pct), Style::default().fg(mem_color)),
         ]),
+        Line::from(vec![
+            Span::styled("IO:   ", gray),
+            Span::styled(format!("R {}/s", format_bytes_short(disk_r)), Style::default().fg(Color::Green)),
+            Span::styled(format!("  W {}/s", format_bytes_short(disk_w)), Style::default().fg(Color::Yellow)),
+        ]),
     ];
 
-    if sys.mem.swap_total > 0 {
-        let swap_color = if swap_pct > 50.0 { Color::Red } else if swap_pct > 10.0 { Color::Yellow } else { Color::Green };
+    if sys.bitcoind.found {
+        let bc = &sys.bitcoind;
+        let bc_cpu_color = if bc.cpu_pct > 80.0 { Color::Red } else if bc.cpu_pct > 30.0 { Color::Yellow } else { Color::Green };
+        lines.push(Line::from(Span::styled("bitcoind:", Style::default().fg(Color::Cyan))));
         lines.push(Line::from(vec![
-            Span::styled("Swap: ", gray),
-            Span::styled(format!("{}/{}", format_bytes_short(sys.mem.swap_used), format_bytes_short(sys.mem.swap_total)), Style::default().fg(swap_color)),
-            Span::styled(format!(" ({:.0}%)", swap_pct), Style::default().fg(swap_color)),
-        ]));
-    }
-
-    lines.push(Line::from(vec![
-        Span::styled("IO:   ", gray),
-        Span::styled(format!("R {}/s", format_bytes_short(disk_r)), Style::default().fg(Color::Green)),
-        Span::styled(format!("  W {}/s", format_bytes_short(disk_w)), Style::default().fg(Color::Yellow)),
-    ]));
-
-    // Per-disk breakdown if space allows
-    for disk in sys.disks.iter().take(3) {
-        lines.push(Line::from(vec![
-            Span::styled(format!("  {:>3} ", disk.name), Style::default().fg(Color::Cyan)),
-            Span::styled(format!("R {}/s", format_bytes_short(disk.read_per_sec)), Style::default().fg(Color::Green)),
-            Span::styled(format!(" W {}/s", format_bytes_short(disk.write_per_sec)), Style::default().fg(Color::Yellow)),
+            Span::styled("  CPU ", gray),
+            Span::styled(format!("{:.0}%", bc.cpu_pct), Style::default().fg(bc_cpu_color)),
+            Span::styled("  Mem ", gray),
+            Span::styled(format_bytes_short(bc.rss), Style::default().fg(Color::White)),
         ]));
     }
 

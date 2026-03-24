@@ -180,7 +180,7 @@ async fn main() -> anyhow::Result<()> {
     let (sys_tx, mut sys_rx) = mpsc::channel::<SystemStats>(2);
     tokio::spawn(async move {
         let mut sampler = sys::SystemSampler::new();
-        let mut interval = tokio::time::interval(Duration::from_secs(2));
+        let mut interval = tokio::time::interval(Duration::from_secs(1));
         interval.tick().await;
         loop { interval.tick().await; let _ = sys_tx.send(sampler.sample()).await; }
     });
@@ -346,10 +346,9 @@ async fn main() -> anyhow::Result<()> {
             }
             Some(sys) = sys_rx.recv() => {
                 let mut state = state_cell.borrow_mut();
-                let in_ibd = state.node_data.blockchain.initialblockdownload;
                 state.system_stats = sys;
                 drop(state);
-                if in_ibd { redraw = true; }
+                redraw = true;
             }
             Some(Ok(event)) = event_stream.next() => {
                 if let Event::Key(key) = event {
