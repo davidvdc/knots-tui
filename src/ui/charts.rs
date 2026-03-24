@@ -115,14 +115,33 @@ fn draw_charts(f: &mut Frame, area: Rect, analytics: &crate::AnalyticsData, char
             .map(|dt| dt.format("%m-%d").to_string())
             .unwrap_or_default()
     };
-    let y_labels = |top: f64| -> Vec<Span<'static>> {
-        vec![Span::raw("0"), Span::raw(format!("{:.2}", top / 2.0)), Span::raw(format!("{:.2}", top))]
+    let fmt_date_hour = |ts: f64| -> String {
+        chrono::DateTime::from_timestamp(ts as i64, 0)
+            .map(|dt| dt.format("%d %H:%M").to_string())
+            .unwrap_or_default()
+    };
+    let y_labels = |top: f64, n: usize| -> Vec<Span<'static>> {
+        (0..=n).map(|i| {
+            let v = top * i as f64 / n as f64;
+            if v == 0.0 { Span::raw("0") } else { Span::raw(format!("{:.1}", v)) }
+        }).collect()
+    };
+    let x_labels_daily = |min: f64, max: f64, n: usize| -> Vec<Span<'static>> {
+        (0..=n).map(|i| {
+            let ts = min + (max - min) * i as f64 / n as f64;
+            Span::raw(fmt_date(ts))
+        }).collect()
+    };
+    let x_labels_hourly = |min: f64, max: f64, n: usize| -> Vec<Span<'static>> {
+        (0..=n).map(|i| {
+            let ts = min + (max - min) * i as f64 / n as f64;
+            Span::raw(fmt_date_hour(ts))
+        }).collect()
     };
 
     let d_min = daily_primary.first().map(|(x, _)| *x).unwrap_or(0.0);
     let d_max = daily_primary.last().map(|(x, _)| *x).unwrap_or(1.0);
     let d_range = if (d_max - d_min).abs() < 1.0 { [d_min - 86400.0, d_max + 86400.0] } else { [d_min, d_max] };
-    let d_mid = (d_min + d_max) / 2.0;
     let mut d_y_max = daily_primary.iter().map(|(_, y)| *y).fold(0.0f64, f64::max);
     if !daily_secondary.is_empty() { d_y_max = d_y_max.max(daily_secondary.iter().map(|(_, y)| *y).fold(0.0f64, f64::max)); }
     let d_y_top = (d_y_max * 1.1).max(0.5).min(100.0);
@@ -130,7 +149,6 @@ fn draw_charts(f: &mut Frame, area: Rect, analytics: &crate::AnalyticsData, char
     let h_min = hourly_primary.first().map(|(x, _)| *x).unwrap_or(0.0);
     let h_max = hourly_primary.last().map(|(x, _)| *x).unwrap_or(1.0);
     let h_range = if (h_max - h_min).abs() < 1.0 { [h_min - 3600.0, h_max + 3600.0] } else { [h_min, h_max] };
-    let h_mid = (h_min + h_max) / 2.0;
     let mut h_y_max = hourly_primary.iter().map(|(_, y)| *y).fold(0.0f64, f64::max);
     if !hourly_secondary.is_empty() { h_y_max = h_y_max.max(hourly_secondary.iter().map(|(_, y)| *y).fold(0.0f64, f64::max)); }
     let h_y_top = (h_y_max * 1.1).max(0.5).min(100.0);
@@ -153,8 +171,8 @@ fn draw_charts(f: &mut Frame, area: Rect, analytics: &crate::AnalyticsData, char
         .block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).title(top_title).style(Style::default().fg(Color::Cyan)))
         .legend_position(Some(LegendPosition::TopLeft))
         .x_axis(Axis::default().style(Style::default().fg(Color::DarkGray)).bounds(d_range)
-            .labels(vec![Span::raw(fmt_date(d_min)), Span::raw(fmt_date(d_mid)), Span::raw(fmt_date(d_max))]))
-        .y_axis(Axis::default().title("%").style(Style::default().fg(Color::DarkGray)).bounds([0.0, d_y_top]).labels(y_labels(d_y_top)));
+            .labels(x_labels_daily(d_min, d_max, 6)))
+        .y_axis(Axis::default().title("%").style(Style::default().fg(Color::DarkGray)).bounds([0.0, d_y_top]).labels(y_labels(d_y_top, 5)));
     f.render_widget(chart_top, chunks[0]);
 
     let mut bottom_datasets = vec![
@@ -170,8 +188,8 @@ fn draw_charts(f: &mut Frame, area: Rect, analytics: &crate::AnalyticsData, char
         .block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).title(bottom_title).style(Style::default().fg(Color::Cyan)))
         .legend_position(Some(LegendPosition::TopLeft))
         .x_axis(Axis::default().style(Style::default().fg(Color::DarkGray)).bounds(h_range)
-            .labels(vec![Span::raw(fmt_date(h_min)), Span::raw(fmt_date(h_mid)), Span::raw(fmt_date(h_max))]))
-        .y_axis(Axis::default().title("%").style(Style::default().fg(Color::DarkGray)).bounds([0.0, h_y_top]).labels(y_labels(h_y_top)));
+            .labels(x_labels_hourly(h_min, h_max, 6)))
+        .y_axis(Axis::default().title("%").style(Style::default().fg(Color::DarkGray)).bounds([0.0, h_y_top]).labels(y_labels(h_y_top, 5)));
     f.render_widget(chart_bottom, chunks[1]);
 }
 
