@@ -2184,8 +2184,8 @@ fn chart_aggregate_daily(stats: &[BlockStats], extract: impl Fn(&BlockStats) -> 
 }
 
 fn chart_aggregate_hourly(stats: &[BlockStats], extract: impl Fn(&BlockStats) -> (u64, u64)) -> Vec<(f64, f64)> {
-    let min_time = stats.first().map(|s| s.time).unwrap_or(0);
-    let max_time = stats.last().map(|s| s.time).unwrap_or(0);
+    let min_time = stats.iter().map(|s| s.time).min().unwrap_or(0);
+    let max_time = stats.iter().map(|s| s.time).max().unwrap_or(0);
     let start_hour = (min_time / 3600) * 3600;
     let end_hour = ((max_time / 3600) + 1) * 3600;
     let mut points = Vec::new();
