@@ -2180,53 +2180,47 @@ fn draw_charts(f: &mut Frame, area: Rect, analytics: &AnalyticsData) {
 
     let stats = &analytics.stats; // sorted by height
 
-    // Compute per-block OPNET weight % and 24h moving average
-    let mut per_block: Vec<(f64, f64)> = Vec::with_capacity(stats.len());
-    let mut ma_data: Vec<(f64, f64)> = Vec::with_capacity(stats.len());
+    // --- Top chart: Daily accumulated OPNET weight % ---
+    let mut daily: BTreeMap<u64, (u64, u64)> = BTreeMap::new(); // day_ts -> (opnet_vsize, total_vsize)
+    for s in stats {
+        let day = (s.time / 86400) * 86400;
+        let entry = daily.entry(day).or_insert((0, 0));
+        entry.0 += s.opnet_vsize;
+        entry.1 += s.total_vsize;
+    }
+    let daily_points: Vec<(f64, f64)> = daily.iter().map(|(ts, (opnet, total))| {
+        let pct = if *total > 0 { *opnet as f64 / *total as f64 * 100.0 } else { 0.0 };
+        (*ts as f64, pct)
+    }).collect();
 
-    for (i, s) in stats.iter().enumerate() {
-        let pct = if s.total_vsize > 0 {
-            s.opnet_vsize as f64 / s.total_vsize as f64 * 100.0
-        } else {
-            0.0
-        };
-        per_block.push((s.height as f64, pct));
+    // --- Bottom chart: Rolling 24h window, hourly resolution ---
+    let min_time = stats.first().map(|s| s.time).unwrap_or(0);
+    let max_time = stats.last().map(|s| s.time).unwrap_or(0);
+    let start_hour = (min_time / 3600) * 3600;
+    let end_hour = ((max_time / 3600) + 1) * 3600;
 
-        // 24h moving average: average all blocks within preceding 24 hours
-        let cutoff = s.time.saturating_sub(86400);
-        let mut sum = 0.0;
-        let mut count = 0u64;
-        for j in (0..=i).rev() {
-            if stats[j].time < cutoff {
-                break;
+    let mut hourly_points: Vec<(f64, f64)> = Vec::new();
+    let mut hour = start_hour;
+    while hour <= end_hour {
+        let window_start = hour.saturating_sub(86400);
+        let mut opnet_vsize = 0u64;
+        let mut total_vsize = 0u64;
+        for s in stats {
+            if s.time >= window_start && s.time <= hour {
+                opnet_vsize += s.opnet_vsize;
+                total_vsize += s.total_vsize;
             }
-            let p = if stats[j].total_vsize > 0 {
-                stats[j].opnet_vsize as f64 / stats[j].total_vsize as f64 * 100.0
-            } else {
-                0.0
-            };
-            sum += p;
-            count += 1;
         }
-        ma_data.push((s.height as f64, if count > 0 { sum / count as f64 } else { 0.0 }));
+        let pct = if total_vsize > 0 { opnet_vsize as f64 / total_vsize as f64 * 100.0 } else { 0.0 };
+        hourly_points.push((hour as f64, pct));
+        hour += 3600;
     }
 
-    let min_x = stats.first().map(|s| s.height as f64).unwrap_or(0.0);
-    let max_x = stats.last().map(|s| s.height as f64).unwrap_or(1.0);
-    let x_range = if (max_x - min_x).abs() < 1.0 { [min_x - 1.0, max_x + 1.0] } else { [min_x, max_x] };
-    let mid_x = ((min_x + max_x) / 2.0) as u64;
-
-    let max_y_block = per_block.iter().map(|(_, y)| *y).fold(0.0f64, f64::max);
-    let max_y_ma = ma_data.iter().map(|(_, y)| *y).fold(0.0f64, f64::max);
-    let y_top_block = (max_y_block * 1.1).max(0.5);
-    let y_top_ma = (max_y_ma * 1.1).max(0.5);
-
-    let x_labels = |min: f64, mid: u64, max: f64| -> Vec<Span<'static>> {
-        vec![
-            Span::raw(format!("{}", min as u64)),
-            Span::raw(format!("{}", mid)),
-            Span::raw(format!("{}", max as u64)),
-        ]
+    // Helpers
+    let fmt_date = |ts: f64| -> String {
+        chrono::DateTime::from_timestamp(ts as i64, 0)
+            .map(|dt| dt.format("%m-%d").to_string())
+            .unwrap_or_default()
     };
     let y_labels = |top: f64| -> Vec<Span<'static>> {
         vec![
@@ -2236,60 +2230,82 @@ fn draw_charts(f: &mut Frame, area: Rect, analytics: &AnalyticsData) {
         ]
     };
 
+    // Top chart bounds
+    let d_min = daily_points.first().map(|(x, _)| *x).unwrap_or(0.0);
+    let d_max = daily_points.last().map(|(x, _)| *x).unwrap_or(1.0);
+    let d_range = if (d_max - d_min).abs() < 1.0 { [d_min - 86400.0, d_max + 86400.0] } else { [d_min, d_max] };
+    let d_mid = (d_min + d_max) / 2.0;
+    let d_y_top = (daily_points.iter().map(|(_, y)| *y).fold(0.0f64, f64::max) * 1.1).max(0.5);
+
+    // Bottom chart bounds
+    let h_min = hourly_points.first().map(|(x, _)| *x).unwrap_or(0.0);
+    let h_max = hourly_points.last().map(|(x, _)| *x).unwrap_or(1.0);
+    let h_range = if (h_max - h_min).abs() < 1.0 { [h_min - 3600.0, h_max + 3600.0] } else { [h_min, h_max] };
+    let h_mid = (h_min + h_max) / 2.0;
+    let h_y_top = (hourly_points.iter().map(|(_, y)| *y).fold(0.0f64, f64::max) * 1.1).max(0.5);
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(area);
 
-    // Per-block OPNET % chart
-    let dataset_block = Dataset::default()
-        .name("OPNET %")
+    // Top: Daily OPNET %
+    let dataset_daily = Dataset::default()
+        .name("Daily %")
         .marker(symbols::Marker::Braille)
         .graph_type(GraphType::Line)
         .style(Style::default().fg(Color::Yellow))
-        .data(&per_block);
+        .data(&daily_points);
 
-    let chart_top = Chart::new(vec![dataset_block])
+    let chart_top = Chart::new(vec![dataset_daily])
         .block(Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .title(format!(" OPNET % of Block Weight — per block ({} blocks) ", stats.len()))
+            .title(format!(" OPNET % of Block Weight — daily ({} days) ", daily.len()))
             .style(Style::default().fg(Color::Cyan)))
         .x_axis(Axis::default()
             .style(Style::default().fg(Color::DarkGray))
-            .bounds(x_range)
-            .labels(x_labels(min_x, mid_x, max_x)))
+            .bounds(d_range)
+            .labels(vec![
+                Span::raw(fmt_date(d_min)),
+                Span::raw(fmt_date(d_mid)),
+                Span::raw(fmt_date(d_max)),
+            ]))
         .y_axis(Axis::default()
             .title("%")
             .style(Style::default().fg(Color::DarkGray))
-            .bounds([0.0, y_top_block])
-            .labels(y_labels(y_top_block)));
+            .bounds([0.0, d_y_top])
+            .labels(y_labels(d_y_top)));
 
     f.render_widget(chart_top, chunks[0]);
 
-    // 24h moving average chart
-    let dataset_ma = Dataset::default()
-        .name("24h MA")
+    // Bottom: Rolling 24h window (hourly)
+    let dataset_hourly = Dataset::default()
+        .name("24h rolling %")
         .marker(symbols::Marker::Braille)
         .graph_type(GraphType::Line)
         .style(Style::default().fg(Color::Green))
-        .data(&ma_data);
+        .data(&hourly_points);
 
-    let chart_bottom = Chart::new(vec![dataset_ma])
+    let chart_bottom = Chart::new(vec![dataset_hourly])
         .block(Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .title(" OPNET % of Block Weight — 24h Moving Average ")
+            .title(" OPNET % of Block Weight — 24h Rolling Window (hourly) ")
             .style(Style::default().fg(Color::Cyan)))
         .x_axis(Axis::default()
             .style(Style::default().fg(Color::DarkGray))
-            .bounds(x_range)
-            .labels(x_labels(min_x, mid_x, max_x)))
+            .bounds(h_range)
+            .labels(vec![
+                Span::raw(fmt_date(h_min)),
+                Span::raw(fmt_date(h_mid)),
+                Span::raw(fmt_date(h_max)),
+            ]))
         .y_axis(Axis::default()
             .title("%")
             .style(Style::default().fg(Color::DarkGray))
-            .bounds([0.0, y_top_ma])
-            .labels(y_labels(y_top_ma)));
+            .bounds([0.0, h_y_top])
+            .labels(y_labels(h_y_top)));
 
     f.render_widget(chart_bottom, chunks[1]);
 }
