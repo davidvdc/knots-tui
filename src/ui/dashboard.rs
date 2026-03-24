@@ -1,5 +1,6 @@
 use crate::rpc::{BlockInfo, BlockStats, NodeData};
 use crate::service::AppService;
+use crate::sys::SystemStats;
 use crate::AnalyticsData;
 use crossterm::event::KeyCode;
 use ratatui::{prelude::*, widgets::*};
@@ -18,11 +19,12 @@ pub struct DashboardScreen {
     block_scroll: u16,
     peer_scroll: u16,
     show_block_modal: bool,
+    show_warnings_modal: bool,
 }
 
 impl DashboardScreen {
     pub fn new(svc: Arc<AppService>, state: StateRef) -> Self {
-        Self { svc, state, blocks_focused: true, selected_block: 0, block_scroll: 0, peer_scroll: 0, show_block_modal: false }
+        Self { svc, state, blocks_focused: true, selected_block: 0, block_scroll: 0, peer_scroll: 0, show_block_modal: false, show_warnings_modal: false }
     }
 }
 
@@ -30,7 +32,12 @@ impl Screen for DashboardScreen {
     fn name(&self) -> &str { "Dashboard" }
 
     fn footer_hint(&self) -> &str {
-        " q: quit | Tab: switch screen | j/k: switch table | ↑/↓: navigate | r: refresh "
+        let has_warnings = !self.state.borrow().node_data.blockchain.warnings.as_str().is_empty();
+        if has_warnings {
+            " q: quit | Tab: switch screen | j/k: switch table | ↑/↓: navigate | r: refresh | F1: warnings "
+        } else {
+            " q: quit | Tab: switch screen | j/k: switch table | ↑/↓: navigate | r: refresh "
+        }
     }
 
     fn draw(&self, f: &mut Frame, area: Rect) {
@@ -72,7 +79,7 @@ impl Screen for DashboardScreen {
         draw_blockchain_card(f, top_cols[0], data);
         draw_mempool_card(f, top_cols[1], data);
         draw_network_card(f, top_cols[2], data);
-        draw_mining_card(f, top_cols[3], data);
+        draw_system_card(f, top_cols[3], &state.system_stats);
 
         let bottom_rows = Layout::default()
             .direction(Direction::Vertical)
@@ -126,14 +133,25 @@ impl Screen for DashboardScreen {
                 KeyResult::None
             }
             KeyCode::Char('r') => { self.svc.force_refresh(); KeyResult::None }
+            KeyCode::F(1) => {
+                if !self.state.borrow().node_data.blockchain.warnings.as_str().is_empty() {
+                    self.show_warnings_modal = true;
+                }
+                KeyResult::None
+            }
             KeyCode::Esc => KeyResult::Quit,
             _ => KeyResult::None,
         }
     }
 
-    fn has_modal(&self) -> bool { self.show_block_modal }
+    fn has_modal(&self) -> bool { self.show_block_modal || self.show_warnings_modal }
 
     fn draw_modal(&self, f: &mut Frame, area: Rect) {
+        if self.show_warnings_modal {
+            let state = self.state.borrow();
+            draw_warnings_modal(f, area, &state.node_data.blockchain.warnings.as_str());
+            return;
+        }
         let state = self.state.borrow();
         if let Some(b) = state.node_data.recent_blocks.get(self.selected_block as usize) {
             if let Some(s) = state.block_stats_cache.get(&b.height) {
@@ -143,6 +161,13 @@ impl Screen for DashboardScreen {
     }
 
     fn handle_modal_key(&mut self, key: KeyCode) {
+        if self.show_warnings_modal {
+            match key {
+                KeyCode::Esc | KeyCode::F(1) | KeyCode::Char('q') => { self.show_warnings_modal = false; }
+                _ => {}
+            }
+            return;
+        }
         let state = self.state.borrow();
         match key {
             KeyCode::Esc | KeyCode::Char('q') => { self.show_block_modal = false; }
@@ -295,14 +320,18 @@ fn draw_block_modal(f: &mut Frame, area: Rect, block: &BlockInfo, stats: &BlockS
 fn draw_blockchain_card(f: &mut Frame, area: Rect, data: &NodeData) {
     let bc = &data.blockchain; let progress = bc.verificationprogress * 100.0;
     let synced = if progress >= 99.99 { "YES" } else { "syncing" };
+    let disk_str = if bc.pruned {
+        format!("{} (pruned)", format_bytes(bc.size_on_disk))
+    } else {
+        format_bytes(bc.size_on_disk)
+    };
     let lines = vec![
         Line::from(vec![Span::styled("Height:  ", Style::default().fg(Color::DarkGray)), Span::styled(format_number(bc.blocks), Style::default().fg(Color::Yellow).bold())]),
         Line::from(vec![Span::styled("Headers: ", Style::default().fg(Color::DarkGray)), Span::styled(format_number(bc.headers), Style::default().fg(Color::White))]),
         Line::from(vec![Span::styled("Synced:  ", Style::default().fg(Color::DarkGray)), Span::styled(format!("{} ({:.2}%)", synced, progress), Style::default().fg(if progress >= 99.99 { Color::Green } else { Color::Yellow }))]),
         Line::from(vec![Span::styled("Diff:    ", Style::default().fg(Color::DarkGray)), Span::styled(format!("{:.2e}", bc.difficulty), Style::default().fg(Color::White))]),
-        Line::from(vec![Span::styled("Disk:    ", Style::default().fg(Color::DarkGray)), Span::styled(format_bytes(bc.size_on_disk), Style::default().fg(Color::White))]),
-        Line::from(vec![Span::styled("Pruned:  ", Style::default().fg(Color::DarkGray)), Span::styled(if bc.pruned { "yes" } else { "no" }.to_string(), Style::default().fg(Color::White))]),
-        Line::from(vec![Span::styled("IBD:     ", Style::default().fg(Color::DarkGray)), Span::styled(if bc.initialblockdownload { "yes" } else { "no" }.to_string(), Style::default().fg(if bc.initialblockdownload { Color::Yellow } else { Color::Green }))]),
+        Line::from(vec![Span::styled("Hashrate:", Style::default().fg(Color::DarkGray)), Span::styled(format!(" {}", format_hashrate(data.mining.networkhashps)), Style::default().fg(Color::Yellow))]),
+        Line::from(vec![Span::styled("Disk:    ", Style::default().fg(Color::DarkGray)), Span::styled(disk_str, Style::default().fg(Color::White))]),
     ];
     f.render_widget(Paragraph::new(lines).block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).title(" Blockchain ").title_style(Style::default().fg(Color::Cyan).bold())), area);
 }
@@ -323,34 +352,103 @@ fn draw_mempool_card(f: &mut Frame, area: Rect, data: &NodeData) {
 
 fn draw_network_card(f: &mut Frame, area: Rect, data: &NodeData) {
     let net = &data.network; let nt = &data.net_totals;
-    let mut all_lines = vec![
-        Line::from(vec![Span::styled("Conns:    ", Style::default().fg(Color::DarkGray)), Span::styled(format!("{} (in: {} / out: {})", net.connections, net.connections_in, net.connections_out), Style::default().fg(Color::Yellow).bold())]),
-        Line::from(vec![Span::styled("Protocol: ", Style::default().fg(Color::DarkGray)), Span::styled(format!("{}", net.protocolversion), Style::default().fg(Color::White))]),
-        Line::from(vec![Span::styled("Recv:     ", Style::default().fg(Color::DarkGray)), Span::styled(format_bytes(nt.totalbytesrecv), Style::default().fg(Color::Green))]),
-        Line::from(vec![Span::styled("Sent:     ", Style::default().fg(Color::DarkGray)), Span::styled(format_bytes(nt.totalbytessent), Style::default().fg(Color::Red))]),
-        Line::from(vec![Span::styled("Relay fee:", Style::default().fg(Color::DarkGray)), Span::styled(format!(" {:.8} BTC/kvB", net.relayfee), Style::default().fg(Color::White))]),
-        Line::from(vec![Span::styled("Incr fee: ", Style::default().fg(Color::DarkGray)), Span::styled(format!("{:.8} BTC/kvB", net.incrementalfee), Style::default().fg(Color::White))]),
+    let gray = Style::default().fg(Color::DarkGray);
+    let mut lines = vec![
+        Line::from(vec![Span::styled("Conns:    ", gray), Span::styled(format!("{} (in: {} / out: {})", net.connections, net.connections_in, net.connections_out), Style::default().fg(Color::Yellow).bold())]),
+        Line::from(vec![Span::styled("Protocol: ", gray), Span::styled(format!("{}", net.protocolversion), Style::default().fg(Color::White))]),
+        Line::from(vec![Span::styled("Recv:     ", gray), Span::styled(format_bytes(nt.totalbytesrecv), Style::default().fg(Color::Green))]),
+        Line::from(vec![Span::styled("Sent:     ", gray), Span::styled(format_bytes(nt.totalbytessent), Style::default().fg(Color::Red))]),
+        Line::from(vec![Span::styled("Relay fee:", gray), Span::styled(format!(" {:.8} BTC/kvB", net.relayfee), Style::default().fg(Color::White))]),
+        Line::from(vec![Span::styled("Incr fee: ", gray), Span::styled(format!("{:.8} BTC/kvB", net.incrementalfee), Style::default().fg(Color::White))]),
     ];
     if !net.localaddresses.is_empty() {
         let addrs: Vec<String> = net.localaddresses.iter().map(|a| format!("{}:{}", a.address, a.port)).collect();
-        all_lines.push(Line::from(vec![Span::styled("Local:    ", Style::default().fg(Color::DarkGray)), Span::styled(addrs.join(", "), Style::default().fg(Color::White))]));
+        lines.push(Line::from(vec![Span::styled("Local:    ", gray), Span::styled(addrs.join(", "), Style::default().fg(Color::White))]));
     }
-    f.render_widget(Paragraph::new(all_lines).block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).title(" Network ").title_style(Style::default().fg(Color::Green).bold())), area);
+    f.render_widget(Paragraph::new(lines).block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).title(" Network ").title_style(Style::default().fg(Color::Green).bold())), area);
 }
 
-fn draw_mining_card(f: &mut Frame, area: Rect, data: &NodeData) {
-    let mi = &data.mining; let warnings_text = data.blockchain.warnings.as_str();
+fn draw_system_card(f: &mut Frame, area: Rect, sys: &SystemStats) {
+    let gray = Style::default().fg(Color::DarkGray);
+
+    let cpu_total = if !sys.cpus.is_empty() {
+        let sum: f32 = sys.cpus.iter().map(|c| c.user_pct + c.system_pct + c.nice_pct + c.iowait_pct).sum();
+        sum / sys.cpus.len() as f32
+    } else { 0.0 };
+
+    let mem_used = sys.mem.used + sys.mem.buffers + sys.mem.cached;
+    let mem_pct = if sys.mem.total > 0 { mem_used as f64 / sys.mem.total as f64 * 100.0 } else { 0.0 };
+
+    let swap_pct = if sys.mem.swap_total > 0 { sys.mem.swap_used as f64 / sys.mem.swap_total as f64 * 100.0 } else { 0.0 };
+
+    let disk_r: u64 = sys.disks.iter().map(|d| d.read_per_sec).sum();
+    let disk_w: u64 = sys.disks.iter().map(|d| d.write_per_sec).sum();
+
+    let cpu_color = if cpu_total > 80.0 { Color::Red } else if cpu_total > 50.0 { Color::Yellow } else { Color::Green };
+    let mem_color = if mem_pct > 90.0 { Color::Red } else if mem_pct > 70.0 { Color::Yellow } else { Color::Green };
+
     let mut lines = vec![
-        Line::from(vec![Span::styled("Hashrate: ", Style::default().fg(Color::DarkGray)), Span::styled(format_hashrate(mi.networkhashps), Style::default().fg(Color::Yellow).bold())]),
-        Line::from(vec![Span::styled("Pooled TX:", Style::default().fg(Color::DarkGray)), Span::styled(format!(" {}", mi.pooledtx), Style::default().fg(Color::White))]),
+        Line::from(vec![
+            Span::styled("CPU:  ", gray),
+            Span::styled(format!("{:.0}%", cpu_total), Style::default().fg(cpu_color).bold()),
+            Span::styled(format!(" ({} cores)", sys.cpus.len()), gray),
+        ]),
+        Line::from(vec![
+            Span::styled("Mem:  ", gray),
+            Span::styled(format!("{}/{}", format_bytes_short(mem_used), format_bytes_short(sys.mem.total)), Style::default().fg(mem_color)),
+            Span::styled(format!(" ({:.0}%)", mem_pct), Style::default().fg(mem_color)),
+        ]),
     ];
-    if !warnings_text.is_empty() {
-        lines.push(Line::from("")); lines.push(Line::from(Span::styled("Warnings:", Style::default().fg(Color::Red).bold())));
-        for chunk in warnings_text.as_bytes().chunks(area.width.saturating_sub(4) as usize) {
-            if let Ok(s) = std::str::from_utf8(chunk) { lines.push(Line::from(Span::styled(s.to_string(), Style::default().fg(Color::Red)))); }
-        }
+
+    if sys.mem.swap_total > 0 {
+        let swap_color = if swap_pct > 50.0 { Color::Red } else if swap_pct > 10.0 { Color::Yellow } else { Color::Green };
+        lines.push(Line::from(vec![
+            Span::styled("Swap: ", gray),
+            Span::styled(format!("{}/{}", format_bytes_short(sys.mem.swap_used), format_bytes_short(sys.mem.swap_total)), Style::default().fg(swap_color)),
+            Span::styled(format!(" ({:.0}%)", swap_pct), Style::default().fg(swap_color)),
+        ]));
     }
-    f.render_widget(Paragraph::new(lines).block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).title(" Mining / Warnings ").title_style(Style::default().fg(Color::Yellow).bold())), area);
+
+    lines.push(Line::from(vec![
+        Span::styled("IO:   ", gray),
+        Span::styled(format!("R {}/s", format_bytes_short(disk_r)), Style::default().fg(Color::Green)),
+        Span::styled(format!("  W {}/s", format_bytes_short(disk_w)), Style::default().fg(Color::Yellow)),
+    ]));
+
+    // Per-disk breakdown if space allows
+    for disk in sys.disks.iter().take(3) {
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {:>3} ", disk.name), Style::default().fg(Color::Cyan)),
+            Span::styled(format!("R {}/s", format_bytes_short(disk.read_per_sec)), Style::default().fg(Color::Green)),
+            Span::styled(format!(" W {}/s", format_bytes_short(disk.write_per_sec)), Style::default().fg(Color::Yellow)),
+        ]));
+    }
+
+    f.render_widget(Paragraph::new(lines).block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).title(" System ").title_style(Style::default().fg(Color::Yellow).bold())), area);
+}
+
+fn draw_warnings_modal(f: &mut Frame, area: Rect, warnings: &str) {
+    let modal_width = (area.width as f32 * 0.6) as u16;
+    let modal_height = 12u16.min(area.height - 4);
+    let x = (area.width.saturating_sub(modal_width)) / 2;
+    let y = (area.height.saturating_sub(modal_height)) / 2;
+    let modal_area = Rect::new(x, y, modal_width, modal_height);
+
+    f.render_widget(Clear, modal_area);
+    f.render_widget(Block::default().style(Style::default().bg(Color::Black)), area);
+
+    let mut lines = vec![Line::from("")];
+    for line in warnings.lines() {
+        lines.push(Line::from(Span::styled(line.to_string(), Style::default().fg(Color::Red))));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled("Press Esc or F1 to close", Style::default().fg(Color::DarkGray))));
+
+    let block = Block::default().borders(Borders::ALL).border_type(BorderType::Double)
+        .title(" Warnings ").title_style(Style::default().fg(Color::Red).bold())
+        .style(Style::default().bg(Color::Black));
+    f.render_widget(Clear, modal_area);
+    f.render_widget(Paragraph::new(lines).block(block).wrap(Wrap { trim: false }), modal_area);
 }
 
 fn draw_analytics_summary(f: &mut Frame, area: Rect, analytics: &AnalyticsData) {
