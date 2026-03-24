@@ -118,11 +118,12 @@ The dashboard poll loop runs as a tokio task controlled by `poll_active: AtomicB
 ## System stats & process tracking
 
 - `SystemSampler` reads `/proc` every 1 second: CPU per-core, memory, disk I/O, process stats
-- Memory uses htop-style "used" (excludes buffers/cached)
+- **Memory**: `MemTotal - MemAvailable` (committed memory including mmapped files, buffers, cached — always >= any process RSS)
+- **CPU**: all values on same 0-100% scale (per-core average for system, normalized by core count for processes)
 - Process detection via `find_pid_by_name()`: scans `/proc/*/comm` (starts_with match) with `/proc/*/cmdline` fallback
 - **bitcoind**: detected by comm starting with "bitcoin" or containing "knots" (handles renamed binaries like `bitcoind2`)
 - **tor**: detected by comm starting with "tor"; only shown in System card when node has onion peers (`.onion` in peer addr or local addresses)
-- CPU% calculated from `/proc/[pid]/stat` utime+stime deltas between samples
+- CPU% calculated from `/proc/[pid]/stat` utime+stime deltas between samples, divided by core count
 - RSS memory from `/proc/[pid]/statm` (pages * 4096)
 - Process stats hidden (not "not found") when process isn't running locally
 
@@ -157,7 +158,7 @@ The dashboard poll loop runs as a tokio task controlled by `poll_active: AtomicB
   - **Blockchain**: height, headers, sync status, difficulty, hashrate, disk (with pruned indicator)
   - **Mempool**: txs, size, memory, fees, relay/min fee, loaded status
   - **Network**: connections, protocol, recv/sent totals, relay/incremental fee, local addresses
-  - **System**: CPU avg%, memory (htop-style used, excludes buffers/cached), disk I/O totals, bitcoind process CPU%/RSS, tor process CPU%/RSS (shown only when node has onion peers)
+  - **System**: table layout with Sys/Btc/Tor/Of columns — CPU row (avg%, normalized per core), Mem row (MemTotal-MemAvailable, RSS), disk IO as drive columns with R/W rows (up to 4 drives). Btc/Tor columns hidden when process not found. Tor only shown when node has onion peers
 - System stats update every 1 second
 - Warnings shown via `F1` popup modal (footer hint only appears when warnings exist)
 - Recent blocks table (last 8) — fixed 11 rows
@@ -205,6 +206,7 @@ The dashboard poll loop runs as a tokio task controlled by `poll_active: AtomicB
 - Use single-line commit messages (`git commit -m "message"`) — no heredocs or multi-line
 - Release notes: pass directly to `--notes "..."` — no heredocs (cat/EOF). Use `\n` for newlines if needed
 - Keep column widths tight — match to actual data width
+- `format_bytes_short` returns fixed 5-char string (`XXXXY`): number right-justified in 4 chars + unit. Decimal when <100 of unit (`1.0M`, `10.0M`), integer at 100+ (`123M`)
 - Top info cards fixed at 9 rows; recent blocks at 11 rows; peers fills remaining space
 - Connection type column is 19 chars wide (longest value: `outbound-full-relay`)
 - Footer shows ASCII dot spinner `[.  ]` that advances on each RPC call (including quick-checks via `spinner_notify`)
