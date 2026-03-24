@@ -372,57 +372,71 @@ fn draw_network_card(f: &mut Frame, area: Rect, data: &NodeData) {
 
 fn draw_system_card(f: &mut Frame, area: Rect, sys: &SystemStats, uses_tor: bool) {
     let gray = Style::default().fg(Color::DarkGray);
+    let white = Style::default().fg(Color::White);
+    let show_tor = uses_tor && sys.tor.found;
+    let show_btc = sys.bitcoind.found;
 
     let cpu_total = if !sys.cpus.is_empty() {
         let sum: f32 = sys.cpus.iter().map(|c| c.user_pct + c.system_pct + c.nice_pct + c.iowait_pct).sum();
         sum / sys.cpus.len() as f32
     } else { 0.0 };
+    let mem_used = sys.mem.used;
 
-    let mem_used = sys.mem.used; // excludes buffers/cached (like htop green)
-    let mem_pct = if sys.mem.total > 0 { mem_used as f64 / sys.mem.total as f64 * 100.0 } else { 0.0 };
+    let pct_color = |pct: f32, hi: f32, mid: f32| -> Color {
+        if pct > hi { Color::Red } else if pct > mid { Color::Yellow } else { Color::Green }
+    };
 
+    // Column width for values
+    let w = 6usize;
+
+    // Header
+    let mut hdr = vec![Span::styled(format!("{:>4}", ""), gray), Span::styled(format!("{:>w$}", "Sys"), Style::default().fg(Color::Cyan))];
+    if show_btc { hdr.push(Span::styled(format!("{:>w$}", "Btc"), Style::default().fg(Color::Cyan))); }
+    if show_tor { hdr.push(Span::styled(format!("{:>w$}", "Tor"), Style::default().fg(Color::Magenta))); }
+    hdr.push(Span::styled(format!("{:>w$}", "Of"), gray));
+
+    // CPU row
+    let mut cpu_row = vec![
+        Span::styled("CPU ", gray),
+        Span::styled(format!("{:>w$}", format!("{:.0}%", cpu_total)), Style::default().fg(pct_color(cpu_total, 80.0, 50.0))),
+    ];
+    if show_btc { cpu_row.push(Span::styled(format!("{:>w$}", format!("{:.0}%", sys.bitcoind.cpu_pct)), Style::default().fg(pct_color(sys.bitcoind.cpu_pct, 80.0, 30.0)))); }
+    if show_tor { cpu_row.push(Span::styled(format!("{:>w$}", format!("{:.0}%", sys.tor.cpu_pct)), Style::default().fg(pct_color(sys.tor.cpu_pct, 50.0, 10.0)))); }
+    cpu_row.push(Span::styled(format!("{:>w$}", format!("{}c", sys.cpus.len())), gray));
+
+    // Mem row
+    let mut mem_row = vec![
+        Span::styled("Mem ", gray),
+        Span::styled(format!("{:>w$}", format_bytes_short(mem_used)), white),
+    ];
+    if show_btc { mem_row.push(Span::styled(format!("{:>w$}", format_bytes_short(sys.bitcoind.rss)), white)); }
+    if show_tor { mem_row.push(Span::styled(format!("{:>w$}", format_bytes_short(sys.tor.rss)), white)); }
+    mem_row.push(Span::styled(format!("{:>w$}", format_bytes_short(sys.mem.total)), gray));
+
+    // Swap row (only if swap exists)
+    let mut lines = vec![Line::from(hdr), Line::from(cpu_row), Line::from(mem_row)];
+
+    if sys.mem.swap_total > 0 && sys.mem.swap_used > 0 {
+        let swap_pct = sys.mem.swap_used as f32 / sys.mem.swap_total as f32 * 100.0;
+        let mut swap_row = vec![
+            Span::styled("Swp ", gray),
+            Span::styled(format!("{:>w$}", format_bytes_short(sys.mem.swap_used)), Style::default().fg(pct_color(swap_pct, 50.0, 10.0))),
+        ];
+        // Pad btc/tor columns
+        if show_btc { swap_row.push(Span::raw(format!("{:>w$}", ""))); }
+        if show_tor { swap_row.push(Span::raw(format!("{:>w$}", ""))); }
+        swap_row.push(Span::styled(format!("{:>w$}", format_bytes_short(sys.mem.swap_total)), gray));
+        lines.push(Line::from(swap_row));
+    }
+
+    // Disk IO
     let disk_r: u64 = sys.disks.iter().map(|d| d.read_per_sec).sum();
     let disk_w: u64 = sys.disks.iter().map(|d| d.write_per_sec).sum();
-
-    let cpu_color = if cpu_total > 80.0 { Color::Red } else if cpu_total > 50.0 { Color::Yellow } else { Color::Green };
-    let mem_color = if mem_pct > 90.0 { Color::Red } else if mem_pct > 70.0 { Color::Yellow } else { Color::Green };
-
-    let mut lines = vec![
-        Line::from(vec![
-            Span::styled("CPU:  ", gray),
-            Span::styled(format!("{:.0}%", cpu_total), Style::default().fg(cpu_color).bold()),
-            Span::styled(format!(" ({} cores)", sys.cpus.len()), gray),
-        ]),
-        Line::from(vec![
-            Span::styled("Mem:  ", gray),
-            Span::styled(format!("{}/{}", format_bytes_short(mem_used), format_bytes_short(sys.mem.total)), Style::default().fg(mem_color)),
-            Span::styled(format!(" ({:.0}%)", mem_pct), Style::default().fg(mem_color)),
-        ]),
-        Line::from(vec![
-            Span::styled("IO:   ", gray),
-            Span::styled(format!("R {}/s", format_bytes_short(disk_r)), Style::default().fg(Color::Green)),
-            Span::styled(format!("  W {}/s", format_bytes_short(disk_w)), Style::default().fg(Color::Yellow)),
-        ]),
-    ];
-
-    if sys.bitcoind.found {
-        let bc = &sys.bitcoind;
-        let c = if bc.cpu_pct > 80.0 { Color::Red } else if bc.cpu_pct > 30.0 { Color::Yellow } else { Color::Green };
-        let mut proc_spans = vec![
-            Span::styled("btc ", Style::default().fg(Color::Cyan)),
-            Span::styled(format!("{:.0}%", bc.cpu_pct), Style::default().fg(c)),
-            Span::styled(format!(" {}", format_bytes_short(bc.rss)), Style::default().fg(Color::White)),
-        ];
-        // Show tor stats only if node has onion peers
-        if sys.tor.found && uses_tor {
-            let t = &sys.tor;
-            let tc = if t.cpu_pct > 50.0 { Color::Red } else if t.cpu_pct > 10.0 { Color::Yellow } else { Color::Green };
-            proc_spans.push(Span::styled("  tor ", Style::default().fg(Color::Magenta)));
-            proc_spans.push(Span::styled(format!("{:.0}%", t.cpu_pct), Style::default().fg(tc)));
-            proc_spans.push(Span::styled(format!(" {}", format_bytes_short(t.rss)), Style::default().fg(Color::White)));
-        }
-        lines.push(Line::from(proc_spans));
-    }
+    lines.push(Line::from(vec![
+        Span::styled("IO  ", gray),
+        Span::styled(format!("R {}/s", format_bytes_short(disk_r)), Style::default().fg(Color::Green)),
+        Span::styled(format!(" W {}/s", format_bytes_short(disk_w)), Style::default().fg(Color::Yellow)),
+    ]));
 
     f.render_widget(Paragraph::new(lines).block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).title(" System ").title_style(Style::default().fg(Color::Yellow).bold())), area);
 }
