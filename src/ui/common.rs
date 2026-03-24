@@ -44,21 +44,26 @@ pub fn format_bytes(bytes: u64) -> String {
     }
 }
 
+/// Fixed-width byte formatting: always 5 chars (`XXXXY` where Y is unit).
+/// Number portion right-justified in 4 chars, 1 decimal when <10 of unit.
 pub fn format_bytes_short(bytes: u64) -> String {
     const KB: f64 = 1024.0;
     const MB: f64 = KB * 1024.0;
     const GB: f64 = MB * 1024.0;
 
     let b = bytes as f64;
-    if b >= GB {
-        format!("{:.1}G", b / GB)
+    let (n, u) = if b >= GB {
+        let g = b / GB;
+        (if g >= 100.0 { format!("{:.0}", g) } else { format!("{:.1}", g) }, "G")
     } else if b >= MB {
-        format!("{:.1}M", b / MB)
+        let m = b / MB;
+        (if m >= 100.0 { format!("{:.0}", m) } else { format!("{:.1}", m) }, "M")
     } else if b >= KB {
-        format!("{:.0}K", b / KB)
+        (format!("{:.0}", b / KB), "K")
     } else {
-        format!("{}B", bytes)
-    }
+        (format!("{}", bytes), "B")
+    };
+    format!("{:>4}{}", n, u)
 }
 
 pub fn format_duration(seconds: u64) -> String {
@@ -232,22 +237,39 @@ mod tests {
 
     #[test]
     fn bytes_short_zero() {
-        assert_eq!(format_bytes_short(0), "0B");
+        assert_eq!(format_bytes_short(0), "   0B");
+    }
+
+    #[test]
+    fn bytes_short_bytes() {
+        assert_eq!(format_bytes_short(512), " 512B");
     }
 
     #[test]
     fn bytes_short_kb() {
-        assert_eq!(format_bytes_short(1024), "1K");
+        assert_eq!(format_bytes_short(1024), "   1K");
+        assert_eq!(format_bytes_short(10 * 1024), "  10K");
+        assert_eq!(format_bytes_short(100 * 1024), " 100K");
     }
 
     #[test]
     fn bytes_short_mb() {
-        assert_eq!(format_bytes_short(1024 * 1024), "1.0M");
+        assert_eq!(format_bytes_short(1024 * 1024), " 1.0M");
+        assert_eq!(format_bytes_short(10 * 1024 * 1024), "10.0M");
+        assert_eq!(format_bytes_short(100 * 1024 * 1024), " 100M");
     }
 
     #[test]
     fn bytes_short_gb() {
-        assert_eq!(format_bytes_short(1024 * 1024 * 1024), "1.0G");
+        assert_eq!(format_bytes_short(1024 * 1024 * 1024), " 1.0G");
+        assert_eq!(format_bytes_short(10 * 1024 * 1024 * 1024), "10.0G");
+    }
+
+    #[test]
+    fn bytes_short_always_5_chars() {
+        for &v in &[0, 512, 1024, 10240, 102400, 1048576, 10485760, 104857600, 1073741824] {
+            assert_eq!(format_bytes_short(v).len(), 5, "failed for {}", v);
+        }
     }
 
     // --- format_duration ---

@@ -358,8 +358,8 @@ fn draw_network_card(f: &mut Frame, area: Rect, data: &NodeData) {
     let mut lines = vec![
         Line::from(vec![Span::styled("Conns:    ", gray), Span::styled(format!("{} (in: {} / out: {})", net.connections, net.connections_in, net.connections_out), Style::default().fg(Color::Yellow).bold())]),
         Line::from(vec![Span::styled("Protocol: ", gray), Span::styled(format!("{}", net.protocolversion), Style::default().fg(Color::White))]),
-        Line::from(vec![Span::styled("Recv:     ", gray), Span::styled(format_bytes(nt.totalbytesrecv), Style::default().fg(Color::Green))]),
-        Line::from(vec![Span::styled("Sent:     ", gray), Span::styled(format_bytes(nt.totalbytessent), Style::default().fg(Color::Red))]),
+        Line::from(vec![Span::styled("Recv:     ", gray), Span::styled(format_bytes_short(nt.totalbytesrecv), Style::default().fg(Color::Green))]),
+        Line::from(vec![Span::styled("Sent:     ", gray), Span::styled(format_bytes_short(nt.totalbytessent), Style::default().fg(Color::Red))]),
         Line::from(vec![Span::styled("Relay fee:", gray), Span::styled(format!(" {:.8} BTC/kvB", net.relayfee), Style::default().fg(Color::White))]),
         Line::from(vec![Span::styled("Incr fee: ", gray), Span::styled(format!("{:.8} BTC/kvB", net.incrementalfee), Style::default().fg(Color::White))]),
     ];
@@ -496,7 +496,7 @@ fn draw_blocks_table(f: &mut Frame, area: Rect, data: &NodeData, block_stats: &H
         } else { ("-".into(), "-".into(), "-".into(), Color::DarkGray, "-".into(), String::new(), Color::DarkGray) };
         let timestamp = if b.time > 0 { chrono::DateTime::from_timestamp(b.time as i64, 0).map(|dt| dt.format("%m-%d %H:%M").to_string()).unwrap_or("-".into()) } else { "-".into() };
         Row::new(vec![
-            Cell::from(Span::styled(marker, Style::default().fg(Color::Yellow))), Cell::from(format_number(b.height)), Cell::from(timestamp), Cell::from(format_number(b.tx_count as u64)), Cell::from(format_bytes_short(b.size)), Cell::from(format!("{:.1} kvWU", b.weight as f64 / 1000.0)), Cell::from(age), Cell::from(Span::styled(bip110.to_string(), Style::default().fg(bip110_color))), Cell::from(btc_out), Cell::from(fees), Cell::from(Span::styled(financial, Style::default().fg(fin_color))), Cell::from(Line::from(Span::styled(viol_count, Style::default().fg(viol_color))).alignment(Alignment::Right)), Cell::from(Span::styled(viol_pct_str, Style::default().fg(viol_color))),
+            Cell::from(Span::styled(marker, Style::default().fg(Color::Yellow))), Cell::from(format_number(b.height)), Cell::from(timestamp), Cell::from(format_number(b.tx_count as u64)), Cell::from(format_bytes_short(b.size)), Cell::from(format!("{:>7.1} kvWU", b.weight as f64 / 1000.0)), Cell::from(age), Cell::from(Span::styled(bip110.to_string(), Style::default().fg(bip110_color))), Cell::from(btc_out), Cell::from(fees), Cell::from(Span::styled(financial, Style::default().fg(fin_color))), Cell::from(Line::from(Span::styled(viol_count, Style::default().fg(viol_color))).alignment(Alignment::Right)), Cell::from(Span::styled(viol_pct_str, Style::default().fg(viol_color))),
         ])
     }).collect();
     let widths = vec![Constraint::Length(2), Constraint::Length(10), Constraint::Length(12), Constraint::Length(7), Constraint::Length(10), Constraint::Length(12), Constraint::Length(12), Constraint::Length(7), Constraint::Length(12), Constraint::Length(12), Constraint::Length(5), Constraint::Length(5), Constraint::Min(5)];
