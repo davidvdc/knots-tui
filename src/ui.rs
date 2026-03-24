@@ -22,6 +22,7 @@ pub fn draw(f: &mut Frame, data: &NodeData, peer_scroll: u16, screen: Screen, se
         Screen::KnownPeers => draw_known_peers(f, outer[1], data, peer_scroll),
         Screen::Signaling => draw_signaling(f, outer[1], data, selected_bit),
         Screen::Analytics => draw_analytics(f, outer[1], analytics),
+        Screen::Charts => draw_charts(f, outer[1], analytics),
     }
     draw_footer(f, outer[2], screen, rpc_spinner);
 
@@ -57,6 +58,7 @@ fn draw_header(f: &mut Frame, area: Rect, data: &NodeData, screen: Screen) {
         Screen::KnownPeers => "Known Peers",
         Screen::Signaling => "Signaling",
         Screen::Analytics => "Analytics",
+        Screen::Charts => "Charts",
     };
 
     let title = format!(
@@ -2162,12 +2164,143 @@ fn format_compact(n: u64) -> String {
     }
 }
 
+fn draw_charts(f: &mut Frame, area: Rect, analytics: &AnalyticsData) {
+    if analytics.stats.is_empty() {
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .title(" OPNET Charts ")
+            .style(Style::default().fg(Color::Cyan));
+        let text = Paragraph::new("No data available.")
+            .block(block)
+            .alignment(Alignment::Center);
+        f.render_widget(text, area);
+        return;
+    }
+
+    let stats = &analytics.stats; // sorted by height
+
+    // Compute per-block OPNET weight % and 24h moving average
+    let mut per_block: Vec<(f64, f64)> = Vec::with_capacity(stats.len());
+    let mut ma_data: Vec<(f64, f64)> = Vec::with_capacity(stats.len());
+
+    for (i, s) in stats.iter().enumerate() {
+        let pct = if s.total_vsize > 0 {
+            s.opnet_vsize as f64 / s.total_vsize as f64 * 100.0
+        } else {
+            0.0
+        };
+        per_block.push((s.height as f64, pct));
+
+        // 24h moving average: average all blocks within preceding 24 hours
+        let cutoff = s.time.saturating_sub(86400);
+        let mut sum = 0.0;
+        let mut count = 0u64;
+        for j in (0..=i).rev() {
+            if stats[j].time < cutoff {
+                break;
+            }
+            let p = if stats[j].total_vsize > 0 {
+                stats[j].opnet_vsize as f64 / stats[j].total_vsize as f64 * 100.0
+            } else {
+                0.0
+            };
+            sum += p;
+            count += 1;
+        }
+        ma_data.push((s.height as f64, if count > 0 { sum / count as f64 } else { 0.0 }));
+    }
+
+    let min_x = stats.first().map(|s| s.height as f64).unwrap_or(0.0);
+    let max_x = stats.last().map(|s| s.height as f64).unwrap_or(1.0);
+    let x_range = if (max_x - min_x).abs() < 1.0 { [min_x - 1.0, max_x + 1.0] } else { [min_x, max_x] };
+    let mid_x = ((min_x + max_x) / 2.0) as u64;
+
+    let max_y_block = per_block.iter().map(|(_, y)| *y).fold(0.0f64, f64::max);
+    let max_y_ma = ma_data.iter().map(|(_, y)| *y).fold(0.0f64, f64::max);
+    let y_top_block = (max_y_block * 1.1).max(0.5);
+    let y_top_ma = (max_y_ma * 1.1).max(0.5);
+
+    let x_labels = |min: f64, mid: u64, max: f64| -> Vec<Span<'static>> {
+        vec![
+            Span::raw(format!("{}", min as u64)),
+            Span::raw(format!("{}", mid)),
+            Span::raw(format!("{}", max as u64)),
+        ]
+    };
+    let y_labels = |top: f64| -> Vec<Span<'static>> {
+        vec![
+            Span::raw("0"),
+            Span::raw(format!("{:.2}", top / 2.0)),
+            Span::raw(format!("{:.2}", top)),
+        ]
+    };
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(area);
+
+    // Per-block OPNET % chart
+    let dataset_block = Dataset::default()
+        .name("OPNET %")
+        .marker(symbols::Marker::Braille)
+        .graph_type(GraphType::Line)
+        .style(Style::default().fg(Color::Yellow))
+        .data(&per_block);
+
+    let chart_top = Chart::new(vec![dataset_block])
+        .block(Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .title(format!(" OPNET % of Block Weight — per block ({} blocks) ", stats.len()))
+            .style(Style::default().fg(Color::Cyan)))
+        .x_axis(Axis::default()
+            .style(Style::default().fg(Color::DarkGray))
+            .bounds(x_range)
+            .labels(x_labels(min_x, mid_x, max_x)))
+        .y_axis(Axis::default()
+            .title("%")
+            .style(Style::default().fg(Color::DarkGray))
+            .bounds([0.0, y_top_block])
+            .labels(y_labels(y_top_block)));
+
+    f.render_widget(chart_top, chunks[0]);
+
+    // 24h moving average chart
+    let dataset_ma = Dataset::default()
+        .name("24h MA")
+        .marker(symbols::Marker::Braille)
+        .graph_type(GraphType::Line)
+        .style(Style::default().fg(Color::Green))
+        .data(&ma_data);
+
+    let chart_bottom = Chart::new(vec![dataset_ma])
+        .block(Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .title(" OPNET % of Block Weight — 24h Moving Average ")
+            .style(Style::default().fg(Color::Cyan)))
+        .x_axis(Axis::default()
+            .style(Style::default().fg(Color::DarkGray))
+            .bounds(x_range)
+            .labels(x_labels(min_x, mid_x, max_x)))
+        .y_axis(Axis::default()
+            .title("%")
+            .style(Style::default().fg(Color::DarkGray))
+            .bounds([0.0, y_top_ma])
+            .labels(y_labels(y_top_ma)));
+
+    f.render_widget(chart_bottom, chunks[1]);
+}
+
 fn draw_footer(f: &mut Frame, area: Rect, screen: Screen, rpc_spinner: u8) {
     let hints = match screen {
         Screen::Dashboard => " q: quit | Tab: switch screen | j/k: switch table | ↑/↓: navigate | r: refresh ",
         Screen::KnownPeers => " q: quit | Tab: signaling | ↑/↓: scroll services | r: refresh ",
         Screen::Signaling => " q: quit | Tab: analytics | ↑/↓: select bit | Enter: details | r: refresh ",
-        Screen::Analytics => " q: quit | Tab: dashboard | ↑/↓: scroll | +: extend 30 days | Esc: stop ",
+        Screen::Analytics => " q: quit | Tab: charts | ↑/↓: scroll | +: extend 30 days | Esc: stop ",
+        Screen::Charts => " q: quit | Tab: dashboard ",
     };
 
     const SPINNER: &[&str] = &[".  ", ".. ", "...", " ..", "  .", "   "];

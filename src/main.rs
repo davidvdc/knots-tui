@@ -86,6 +86,7 @@ pub enum Screen {
     KnownPeers = 1,
     Signaling = 2,
     Analytics = 3,
+    Charts = 4,
 }
 
 impl Screen {
@@ -94,6 +95,7 @@ impl Screen {
             1 => Screen::KnownPeers,
             2 => Screen::Signaling,
             3 => Screen::Analytics,
+            4 => Screen::Charts,
             _ => Screen::Dashboard,
         }
     }
@@ -247,7 +249,7 @@ async fn main() -> anyhow::Result<()> {
                     }
                 }
                 Screen::KnownPeers => Some(poll_client.fetch_known_peers().await),
-                Screen::Signaling | Screen::Analytics => None, // handled by their own tasks
+                Screen::Signaling | Screen::Analytics | Screen::Charts => None, // handled by their own tasks
             };
             if let Some(result) = result {
                 match result {
@@ -573,15 +575,16 @@ async fn main() -> anyhow::Result<()> {
                                     screen = match screen {
                                         Screen::Dashboard => Screen::KnownPeers,
                                         Screen::KnownPeers => Screen::Signaling,
-                                        // Skip Analytics during IBD
+                                        // Skip Analytics/Charts during IBD
                                         Screen::Signaling => if in_ibd { Screen::Dashboard } else { Screen::Analytics },
-                                        Screen::Analytics => Screen::Dashboard,
+                                        Screen::Analytics => Screen::Charts,
+                                        Screen::Charts => Screen::Dashboard,
                                     };
                                     current_screen.store(screen as u8, Ordering::Relaxed);
                                     if screen == Screen::Signaling {
                                         signaling_notify.notify_one();
                                     }
-                                    if screen != Screen::Analytics {
+                                    if screen != Screen::Analytics && screen != Screen::Charts {
                                         poll_notify.notify_one();
                                     }
                                 }
@@ -743,8 +746,13 @@ mod tests {
     }
 
     #[test]
+    fn screen_from_u8_charts() {
+        assert_eq!(Screen::from_u8(4), Screen::Charts);
+    }
+
+    #[test]
     fn screen_from_u8_invalid() {
-        assert_eq!(Screen::from_u8(4), Screen::Dashboard);
+        assert_eq!(Screen::from_u8(5), Screen::Dashboard);
         assert_eq!(Screen::from_u8(255), Screen::Dashboard);
     }
 }
