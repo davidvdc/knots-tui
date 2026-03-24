@@ -157,10 +157,11 @@ impl SystemSampler {
             .collect();
         disks.sort_by(|a, b| a.name.cmp(&b.name));
 
-        let bitcoind = sample_process(&self.prev_bitcoind, &["bitcoin", "knots"], dt);
+        let num_cores = curr_cpus.len().max(1) as f32;
+        let bitcoind = sample_process(&self.prev_bitcoind, &["bitcoin", "knots"], dt, num_cores);
         self.prev_bitcoind = find_pid_by_name(&["bitcoin", "knots"]).and_then(read_proc_cpu);
 
-        let tor = sample_process(&self.prev_tor, &["tor"], dt);
+        let tor = sample_process(&self.prev_tor, &["tor"], dt, num_cores);
         self.prev_tor = find_pid_by_name(&["tor"]).and_then(read_proc_cpu);
 
         self.prev_cpus = curr_cpus;
@@ -265,7 +266,8 @@ fn read_disk_samples() -> HashMap<String, DiskSample> {
 }
 
 /// Sample a tracked process: compute CPU% from previous ticks, read current RSS
-fn sample_process(prev: &Option<ProcSample>, names: &[&str], dt: f64) -> ProcessStats {
+/// CPU% normalized by core count so process and system values are on the same 0-100% scale
+fn sample_process(prev: &Option<ProcSample>, names: &[&str], dt: f64, num_cores: f32) -> ProcessStats {
     let pid = prev.as_ref().map(|p| p.pid).or_else(|| find_pid_by_name(names));
     let curr = pid.and_then(read_proc_cpu);
     match (prev, &curr) {
@@ -273,7 +275,7 @@ fn sample_process(prev: &Option<ProcSample>, names: &[&str], dt: f64) -> Process
             let clk_tck = 100.0;
             let d_utime = curr.utime.saturating_sub(prev.utime) as f64;
             let d_stime = curr.stime.saturating_sub(prev.stime) as f64;
-            let cpu_pct = ((d_utime + d_stime) / clk_tck / dt * 100.0) as f32;
+            let cpu_pct = ((d_utime + d_stime) / clk_tck / dt * 100.0) as f32 / num_cores;
             ProcessStats { found: true, cpu_pct, rss: read_proc_rss(curr.pid) }
         }
         (None, Some(curr)) => {
