@@ -275,7 +275,7 @@ fn read_disk_samples() -> HashMap<String, DiskSample> {
     samples
 }
 
-/// Find the PID of a running bitcoind/bitcoin-qt process by scanning /proc/*/comm
+/// Find the PID of a running bitcoind/bitcoin-qt/knots process by scanning /proc
 fn find_bitcoind_pid() -> Option<u32> {
     let proc_dir = match std::fs::read_dir("/proc") {
         Ok(d) => d,
@@ -285,13 +285,24 @@ fn find_bitcoind_pid() -> Option<u32> {
         let name = entry.file_name();
         let name_str = name.to_str().unwrap_or("");
         if name_str.chars().all(|c| c.is_ascii_digit()) {
+            let pid: u32 = match name_str.parse() {
+                Ok(p) => p,
+                Err(_) => continue,
+            };
+            // Check comm first (fast)
             let comm_path = entry.path().join("comm");
             if let Ok(comm) = std::fs::read_to_string(&comm_path) {
-                let comm = comm.trim();
-                if comm == "bitcoind" || comm == "bitcoin-qt" {
-                    if let Ok(pid) = name_str.parse::<u32>() {
-                        return Some(pid);
-                    }
+                let comm = comm.trim().to_lowercase();
+                if comm.starts_with("bitcoin") || comm.contains("knots") {
+                    return Some(pid);
+                }
+            }
+            // Fallback: check cmdline for bitcoind/bitcoin-qt
+            let cmdline_path = entry.path().join("cmdline");
+            if let Ok(cmdline) = std::fs::read_to_string(&cmdline_path) {
+                let cmdline = cmdline.to_lowercase();
+                if cmdline.contains("bitcoind") || cmdline.contains("bitcoin-qt") {
+                    return Some(pid);
                 }
             }
         }
