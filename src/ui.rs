@@ -2292,7 +2292,7 @@ fn draw_charts(f: &mut Frame, area: Rect, analytics: &AnalyticsData, chart_mode:
     if !daily_secondary.is_empty() {
         d_y_max = d_y_max.max(daily_secondary.iter().map(|(_, y)| *y).fold(0.0f64, f64::max));
     }
-    let d_y_top = (d_y_max * 1.1).max(0.5);
+    let d_y_top = (d_y_max * 1.1).max(0.5).min(100.0);
 
     // Bottom chart bounds
     let h_min = hourly_primary.first().map(|(x, _)| *x).unwrap_or(0.0);
@@ -2303,7 +2303,7 @@ fn draw_charts(f: &mut Frame, area: Rect, analytics: &AnalyticsData, chart_mode:
     if !hourly_secondary.is_empty() {
         h_y_max = h_y_max.max(hourly_secondary.iter().map(|(_, y)| *y).fold(0.0f64, f64::max));
     }
-    let h_y_top = (h_y_max * 1.1).max(0.5);
+    let h_y_top = (h_y_max * 1.1).max(0.5).min(100.0);
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -2336,6 +2336,7 @@ fn draw_charts(f: &mut Frame, area: Rect, analytics: &AnalyticsData, chart_mode:
             .border_type(BorderType::Rounded)
             .title(top_title)
             .style(Style::default().fg(Color::Cyan)))
+        .legend_position(Some(LegendPosition::TopLeft))
         .x_axis(Axis::default()
             .style(Style::default().fg(Color::DarkGray))
             .bounds(d_range)
@@ -2378,6 +2379,7 @@ fn draw_charts(f: &mut Frame, area: Rect, analytics: &AnalyticsData, chart_mode:
             .border_type(BorderType::Rounded)
             .title(bottom_title)
             .style(Style::default().fg(Color::Cyan)))
+        .legend_position(Some(LegendPosition::TopLeft))
         .x_axis(Axis::default()
             .style(Style::default().fg(Color::DarkGray))
             .bounds(h_range)
