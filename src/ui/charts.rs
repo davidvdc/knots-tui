@@ -3,16 +3,18 @@ use crate::service::AppService;
 use crossterm::event::KeyCode;
 use ratatui::{prelude::*, symbols, widgets::*};
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use super::{KeyResult, Screen, SharedState};
 
 pub struct ChartsScreen {
+    svc: Arc<AppService>,
     chart_mode: u8,
 }
 
 impl ChartsScreen {
-    pub fn new() -> Self {
-        Self { chart_mode: 0 }
+    pub fn new(svc: Arc<AppService>) -> Self {
+        Self { svc, chart_mode: 0 }
     }
 }
 
@@ -33,7 +35,7 @@ impl Screen for ChartsScreen {
         draw_charts(f, area, &state.analytics, self.chart_mode);
     }
 
-    fn handle_key(&mut self, key: KeyCode, _state: &mut SharedState, _svc: &AppService) -> KeyResult {
+    fn handle_key(&mut self, key: KeyCode, _state: &mut SharedState) -> KeyResult {
         match key {
             KeyCode::Char('j') => { self.chart_mode = (self.chart_mode + 1) % 3; KeyResult::None }
             KeyCode::Char('k') => { self.chart_mode = self.chart_mode.checked_sub(1).unwrap_or(2); KeyResult::None }
@@ -44,6 +46,10 @@ impl Screen for ChartsScreen {
 
     fn available(&self, state: &SharedState) -> bool {
         !state.node_data.blockchain.initialblockdownload
+    }
+
+    fn on_enter(&mut self) {
+        self.svc.stop_polling();
     }
 }
 

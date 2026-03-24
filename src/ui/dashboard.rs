@@ -1,16 +1,17 @@
 use crate::rpc::{BlockInfo, BlockStats, NodeData};
 use crate::service::AppService;
-use crate::sys::SystemStats;
 use crate::AnalyticsData;
 use crossterm::event::KeyCode;
 use ratatui::{prelude::*, widgets::*};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use super::analytics::{aggregate_period, analytics_data_row, analytics_header_row, analytics_widths};
 use super::common::*;
 use super::{KeyResult, Screen, SharedState};
 
 pub struct DashboardScreen {
+    svc: Arc<AppService>,
     blocks_focused: bool,
     selected_block: u16,
     block_scroll: u16,
@@ -19,14 +20,8 @@ pub struct DashboardScreen {
 }
 
 impl DashboardScreen {
-    pub fn new() -> Self {
-        Self {
-            blocks_focused: true,
-            selected_block: 0,
-            block_scroll: 0,
-            peer_scroll: 0,
-            show_block_modal: false,
-        }
+    pub fn new(svc: Arc<AppService>) -> Self {
+        Self { svc, blocks_focused: true, selected_block: 0, block_scroll: 0, peer_scroll: 0, show_block_modal: false }
     }
 }
 
@@ -44,25 +39,20 @@ impl Screen for DashboardScreen {
             let err_block = Block::default()
                 .borders(Borders::ALL).border_type(BorderType::Rounded)
                 .title(" Error ").style(Style::default().fg(Color::Red));
-            let err_text = Paragraph::new(err.clone()).block(err_block)
-                .wrap(Wrap { trim: true }).style(Style::default().fg(Color::Red));
-            f.render_widget(err_text, area);
+            f.render_widget(Paragraph::new(err.clone()).block(err_block).wrap(Wrap { trim: true }).style(Style::default().fg(Color::Red)), area);
             return;
         }
 
-        // Show loading screen before first data arrives
         if data.network.subversion.is_empty() {
             let block = Block::default()
                 .borders(Borders::ALL).border_type(BorderType::Rounded)
                 .title(" Dashboard ").style(Style::default().fg(Color::Cyan));
             let text = Paragraph::new(vec![
-                Line::from(""),
-                Line::from(""),
+                Line::from(""), Line::from(""),
                 Line::from(Span::styled("Connecting to Bitcoin Knots node...", Style::default().fg(Color::Yellow))),
                 Line::from(""),
                 Line::from(Span::styled("Waiting for first RPC response", Style::default().fg(Color::DarkGray))),
-            ])
-            .block(block).alignment(Alignment::Center);
+            ]).block(block).alignment(Alignment::Center);
             f.render_widget(text, area);
             return;
         }
@@ -92,18 +82,17 @@ impl Screen for DashboardScreen {
         draw_peers_table(f, bottom_rows[2], data, self.peer_scroll, !self.blocks_focused);
     }
 
-    fn handle_key(&mut self, key: KeyCode, state: &mut SharedState, svc: &AppService) -> KeyResult {
+    fn handle_key(&mut self, key: KeyCode, state: &mut SharedState) -> KeyResult {
         match key {
             KeyCode::Down => {
                 if self.blocks_focused {
                     let max = state.node_data.recent_blocks.len().saturating_sub(1) as u16;
-                    if self.selected_block == max && !state.fetching_older_blocks {
+                    if self.selected_block == max && !self.svc.is_fetching_older_blocks() {
                         if let Some(lowest) = state.node_data.recent_blocks.last().map(|b| b.height) {
                             if lowest > 1 {
-                                state.fetching_older_blocks = true;
                                 let end = lowest.saturating_sub(1);
                                 let start = end.saturating_sub(49);
-                                svc.fetch_older_blocks(start, end);
+                                self.svc.fetch_older_blocks(start, end);
                             }
                         }
                     }
@@ -133,7 +122,7 @@ impl Screen for DashboardScreen {
                 }
                 KeyResult::None
             }
-            KeyCode::Char('r') => { svc.force_refresh(); KeyResult::None }
+            KeyCode::Char('r') => { self.svc.force_refresh(); KeyResult::None }
             KeyCode::Esc => KeyResult::Quit,
             _ => KeyResult::None,
         }
@@ -149,18 +138,17 @@ impl Screen for DashboardScreen {
         }
     }
 
-    fn handle_modal_key(&mut self, key: KeyCode, state: &mut SharedState, svc: &AppService) {
+    fn handle_modal_key(&mut self, key: KeyCode, state: &mut SharedState) {
         match key {
             KeyCode::Esc | KeyCode::Char('q') => { self.show_block_modal = false; }
             KeyCode::Down => {
                 let max = state.node_data.recent_blocks.len().saturating_sub(1) as u16;
-                if self.selected_block == max && !state.fetching_older_blocks {
+                if self.selected_block == max && !self.svc.is_fetching_older_blocks() {
                     if let Some(lowest) = state.node_data.recent_blocks.last().map(|b| b.height) {
                         if lowest > 1 {
-                            state.fetching_older_blocks = true;
                             let end = lowest.saturating_sub(1);
                             let start = end.saturating_sub(49);
-                            svc.fetch_older_blocks(start, end);
+                            self.svc.fetch_older_blocks(start, end);
                         }
                     }
                 }
@@ -179,8 +167,9 @@ impl Screen for DashboardScreen {
         !state.node_data.blockchain.initialblockdownload
     }
 
-    fn on_enter(&self, svc: &AppService) {
-        svc.notify_poll();
+    fn on_enter(&mut self) {
+        self.svc.set_loading(true);
+        self.svc.start_polling();
     }
 }
 
@@ -211,7 +200,7 @@ pub fn draw_peers_table(f: &mut Frame, area: Rect, data: &NodeData, scroll: u16,
     f.render_stateful_widget(table, area, &mut tstate);
 }
 
-// --- Private rendering helpers ---
+// --- Private rendering helpers (unchanged) ---
 
 fn draw_block_modal(f: &mut Frame, area: Rect, block: &BlockInfo, stats: &BlockStats) {
     let modal_width = (area.width as f32 * 0.65) as u16;
@@ -298,11 +287,9 @@ fn draw_block_modal(f: &mut Frame, area: Rect, block: &BlockInfo, stats: &BlockS
 
     let title = format!(" Block {} ", format_number(block.height));
     let modal_block = Block::default().borders(Borders::ALL).border_type(BorderType::Double)
-        .title(title).title_style(Style::default().fg(Color::Cyan).bold())
-        .style(Style::default().bg(Color::Black));
-    let paragraph = Paragraph::new(text).block(modal_block).wrap(Wrap { trim: false });
+        .title(title).title_style(Style::default().fg(Color::Cyan).bold()).style(Style::default().bg(Color::Black));
     f.render_widget(Clear, modal_area);
-    f.render_widget(paragraph, modal_area);
+    f.render_widget(Paragraph::new(text).block(modal_block).wrap(Wrap { trim: false }), modal_area);
 }
 
 fn draw_blockchain_card(f: &mut Frame, area: Rect, data: &NodeData) {
@@ -382,11 +369,9 @@ fn draw_analytics_summary(f: &mut Frame, area: Rect, analytics: &AnalyticsData) 
     let block = Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).title(" Analytics ").style(Style::default().fg(Color::Cyan));
     if agg.blocks > 0 {
         let rows = vec![analytics_data_row("24h", &agg)];
-        let table = Table::new(rows, analytics_widths()).header(analytics_header_row()).block(block);
-        f.render_widget(table, area);
+        f.render_widget(Table::new(rows, analytics_widths()).header(analytics_header_row()).block(block), area);
     } else {
-        let paragraph = Paragraph::new(Line::from(Span::styled("  Waiting for block analysis data...", Style::default().fg(Color::DarkGray)))).block(block);
-        f.render_widget(paragraph, area);
+        f.render_widget(Paragraph::new(Line::from(Span::styled("  Waiting for block analysis data...", Style::default().fg(Color::DarkGray)))).block(block), area);
     }
 }
 

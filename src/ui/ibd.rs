@@ -2,18 +2,20 @@ use crate::service::AppService;
 use crate::sys::SystemStats;
 use crossterm::event::KeyCode;
 use ratatui::{prelude::*, widgets::*};
+use std::sync::Arc;
 
 use super::common::{format_bytes, format_bytes_short, format_duration, format_number};
 use super::dashboard::draw_peers_table;
 use super::{KeyResult, Screen, SharedState};
 
 pub struct IbdScreen {
+    svc: Arc<AppService>,
     peer_scroll: u16,
 }
 
 impl IbdScreen {
-    pub fn new() -> Self {
-        Self { peer_scroll: 0 }
+    pub fn new(svc: Arc<AppService>) -> Self {
+        Self { svc, peer_scroll: 0 }
     }
 }
 
@@ -28,11 +30,11 @@ impl Screen for IbdScreen {
         draw_ibd(f, area, &state.node_data, self.peer_scroll, &state.system_stats);
     }
 
-    fn handle_key(&mut self, key: KeyCode, _state: &mut SharedState, svc: &AppService) -> KeyResult {
+    fn handle_key(&mut self, key: KeyCode, _state: &mut SharedState) -> KeyResult {
         match key {
             KeyCode::Down => { self.peer_scroll = self.peer_scroll.saturating_add(1); KeyResult::None }
             KeyCode::Up => { self.peer_scroll = self.peer_scroll.saturating_sub(1); KeyResult::None }
-            KeyCode::Char('r') => { svc.force_refresh(); KeyResult::None }
+            KeyCode::Char('r') => { self.svc.force_refresh(); KeyResult::None }
             KeyCode::Esc => KeyResult::Quit,
             _ => KeyResult::None,
         }
@@ -42,8 +44,9 @@ impl Screen for IbdScreen {
         state.node_data.blockchain.initialblockdownload
     }
 
-    fn on_enter(&self, svc: &AppService) {
-        svc.notify_poll();
+    fn on_enter(&mut self) {
+        self.svc.set_loading(true);
+        self.svc.start_polling();
     }
 }
 

@@ -4,17 +4,19 @@ use crate::{AnalyticsData, AnalyticsState};
 use crossterm::event::KeyCode;
 use ratatui::{prelude::*, widgets::*};
 use std::collections::{BTreeMap, HashSet};
+use std::sync::Arc;
 
 use super::common::{format_compact, format_number, pct_str};
 use super::{KeyResult, Screen, SharedState};
 
 pub struct AnalyticsScreen {
+    svc: Arc<AppService>,
     scroll: u16,
 }
 
 impl AnalyticsScreen {
-    pub fn new() -> Self {
-        Self { scroll: 0 }
+    pub fn new(svc: Arc<AppService>) -> Self {
+        Self { svc, scroll: 0 }
     }
 }
 
@@ -84,7 +86,7 @@ impl Screen for AnalyticsScreen {
         }
     }
 
-    fn handle_key(&mut self, key: KeyCode, state: &mut SharedState, svc: &AppService) -> KeyResult {
+    fn handle_key(&mut self, key: KeyCode, state: &mut SharedState) -> KeyResult {
         match key {
             KeyCode::Down => { self.scroll = self.scroll.saturating_add(1); KeyResult::None }
             KeyCode::Up => { self.scroll = self.scroll.saturating_sub(1); KeyResult::None }
@@ -92,7 +94,7 @@ impl Screen for AnalyticsScreen {
                 if state.analytics.state == AnalyticsState::Running {
                     state.analytics.state = AnalyticsState::Done;
                     state.analytics.stats.sort_by_key(|s| s.height);
-                    svc.stop_backfill();
+                    self.svc.stop_backfill();
                     KeyResult::None
                 } else {
                     KeyResult::Quit
@@ -105,7 +107,7 @@ impl Screen for AnalyticsScreen {
                     let start = tip.saturating_sub(state.analytics.depth);
                     let all_heights: Vec<u64> = (start..=tip).rev().collect();
                     let cached: HashSet<u64> = state.block_stats_cache.keys().copied().collect();
-                    let total = svc.spawn_backfill(&[], all_heights, &cached);
+                    let total = self.svc.spawn_backfill(&[], all_heights, &cached);
                     if total > 0 {
                         state.analytics.state = AnalyticsState::Running;
                         state.analytics.progress_current = 0;
@@ -121,6 +123,10 @@ impl Screen for AnalyticsScreen {
 
     fn available(&self, state: &SharedState) -> bool {
         !state.node_data.blockchain.initialblockdownload
+    }
+
+    fn on_enter(&mut self) {
+        self.svc.stop_polling();
     }
 }
 

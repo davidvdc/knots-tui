@@ -3,18 +3,20 @@ use crate::service::AppService;
 use crossterm::event::KeyCode;
 use ratatui::{prelude::*, widgets::*};
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use super::common::format_number;
 use super::{KeyResult, Screen, SharedState};
 
 pub struct SignalingScreen {
+    svc: Arc<AppService>,
     selected_bit: u8,
     show_bit_modal: bool,
 }
 
 impl SignalingScreen {
-    pub fn new() -> Self {
-        Self { selected_bit: 0, show_bit_modal: false }
+    pub fn new(svc: Arc<AppService>) -> Self {
+        Self { svc, selected_bit: 0, show_bit_modal: false }
     }
 }
 
@@ -36,12 +38,12 @@ impl Screen for SignalingScreen {
         draw_softforks(f, layout[1], data);
     }
 
-    fn handle_key(&mut self, key: KeyCode, _state: &mut SharedState, svc: &AppService) -> KeyResult {
+    fn handle_key(&mut self, key: KeyCode, _state: &mut SharedState) -> KeyResult {
         match key {
             KeyCode::Down => { self.selected_bit = (self.selected_bit + 1).min(28); KeyResult::None }
             KeyCode::Up => { self.selected_bit = self.selected_bit.saturating_sub(1); KeyResult::None }
             KeyCode::Enter => { self.show_bit_modal = true; KeyResult::None }
-            KeyCode::Char('r') => { svc.notify_signaling(); KeyResult::None }
+            KeyCode::Char('r') => { self.svc.set_loading(true); self.svc.notify_signaling(); KeyResult::None }
             KeyCode::Esc => KeyResult::Quit,
             _ => KeyResult::None,
         }
@@ -53,15 +55,17 @@ impl Screen for SignalingScreen {
         draw_bit_modal(f, area, self.selected_bit, &state.signaling_data);
     }
 
-    fn handle_modal_key(&mut self, key: KeyCode, _state: &mut SharedState, _svc: &AppService) {
+    fn handle_modal_key(&mut self, key: KeyCode, _state: &mut SharedState) {
         match key {
             KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => { self.show_bit_modal = false; }
             _ => {}
         }
     }
 
-    fn on_enter(&self, svc: &AppService) {
-        svc.notify_signaling();
+    fn on_enter(&mut self) {
+        self.svc.set_loading(true);
+        self.svc.stop_polling();
+        self.svc.notify_signaling();
     }
 }
 

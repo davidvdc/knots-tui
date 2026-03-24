@@ -16,8 +16,6 @@ use std::collections::HashMap;
 
 use common::format_duration;
 
-// --- Shared state passed to all screens ---
-
 pub struct SharedState {
     pub node_data: NodeData,
     pub signaling_data: NodeData,
@@ -25,10 +23,7 @@ pub struct SharedState {
     pub analytics: AnalyticsData,
     pub system_stats: SystemStats,
     pub rpc_spinner: u8,
-    pub fetching_older_blocks: bool,
 }
-
-// --- Screen trait ---
 
 #[derive(PartialEq)]
 pub enum KeyResult {
@@ -40,34 +35,31 @@ pub trait Screen {
     fn name(&self) -> &str;
     fn footer_hint(&self) -> &str;
     fn draw(&self, f: &mut Frame, area: Rect, state: &SharedState);
-    fn handle_key(&mut self, key: KeyCode, state: &mut SharedState, svc: &AppService) -> KeyResult;
+    fn handle_key(&mut self, key: KeyCode, state: &mut SharedState) -> KeyResult;
 
     fn has_modal(&self) -> bool { false }
     fn draw_modal(&self, _f: &mut Frame, _area: Rect, _state: &SharedState) {}
-    fn handle_modal_key(&mut self, _key: KeyCode, _state: &mut SharedState, _svc: &AppService) {}
+    fn handle_modal_key(&mut self, _key: KeyCode, _state: &mut SharedState) {}
 
-    /// Whether this screen is available (e.g. analytics hidden during IBD)
     fn available(&self, _state: &SharedState) -> bool { true }
 
-    /// Called when switching to this screen via Tab
-    fn on_enter(&self, _svc: &AppService) {}
+    /// Called when switching to this screen
+    fn on_enter(&mut self) {}
 }
 
-// --- Top-level draw using trait ---
-
-pub fn draw(f: &mut Frame, screen: &dyn Screen, state: &SharedState) {
+pub fn draw(f: &mut Frame, screen: &dyn Screen, state: &SharedState, svc: &AppService) {
     let area = f.area();
 
     let outer = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),  // header
-            Constraint::Min(10),   // body
-            Constraint::Length(1), // footer
+            Constraint::Length(3),
+            Constraint::Min(10),
+            Constraint::Length(1),
         ])
         .split(area);
 
-    draw_header(f, outer[0], &state.node_data, screen.name());
+    draw_header(f, outer[0], &state.node_data, screen.name(), svc.is_loading());
     screen.draw(f, outer[1], state);
     draw_footer(f, outer[2], screen.footer_hint(), state.rpc_spinner);
 
@@ -76,7 +68,7 @@ pub fn draw(f: &mut Frame, screen: &dyn Screen, state: &SharedState) {
     }
 }
 
-fn draw_header(f: &mut Frame, area: Rect, data: &NodeData, screen_name: &str) {
+fn draw_header(f: &mut Frame, area: Rect, data: &NodeData, screen_name: &str, loading: bool) {
     let version = if !data.network.subversion.is_empty() {
         data.network.subversion.clone()
     } else {
@@ -90,16 +82,19 @@ fn draw_header(f: &mut Frame, area: Rect, data: &NodeData, screen_name: &str) {
     };
 
     let uptime = format_duration(data.uptime);
+    let loading_str = if loading { " (loading...)" } else { "" };
 
     let title = format!(
-        " Bitcoin Knots {} | {} | chain: {} | uptime: {} ",
-        screen_name, version, chain, uptime
+        " Bitcoin Knots {}{} | {} | chain: {} | uptime: {} ",
+        screen_name, loading_str, version, chain, uptime
     );
+
+    let border_color = if loading { Color::Yellow } else { Color::Cyan };
 
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .style(Style::default().fg(Color::Cyan));
+        .style(Style::default().fg(border_color));
 
     let header = Paragraph::new(title)
         .block(block)
@@ -121,26 +116,20 @@ fn draw_footer(f: &mut Frame, area: Rect, hint: &str, rpc_spinner: u8) {
     f.render_widget(footer, area);
 }
 
-/// Advance to the next available screen, skipping unavailable ones
 pub fn next_screen(current: usize, screens: &[Box<dyn Screen>], state: &SharedState) -> usize {
     let n = screens.len();
     for i in 1..=n {
         let idx = (current + i) % n;
-        if screens[idx].available(state) {
-            return idx;
-        }
+        if screens[idx].available(state) { return idx; }
     }
     current
 }
 
-/// Go to the previous available screen, skipping unavailable ones
 pub fn prev_screen(current: usize, screens: &[Box<dyn Screen>], state: &SharedState) -> usize {
     let n = screens.len();
     for i in 1..=n {
         let idx = (current + n - i) % n;
-        if screens[idx].available(state) {
-            return idx;
-        }
+        if screens[idx].available(state) { return idx; }
     }
     current
 }

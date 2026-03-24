@@ -13,7 +13,7 @@ use futures::StreamExt;
 use ratatui::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::io::stdout;
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU16, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{mpsc, Notify};
@@ -81,27 +81,8 @@ pub struct AnalyticsData {
     pub depth: u64,
 }
 
-// Screen indices in the screens Vec
 const SCREEN_DASHBOARD: usize = 0;
 const SCREEN_IBD: usize = 5;
-
-/// Screen identifiers for the poll loop (cross-task communication)
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum PollScreen {
-    Dashboard,
-    KnownPeers,
-    Other,
-}
-
-impl PollScreen {
-    fn from_u8(v: u8) -> Self {
-        match v {
-            0 | 5 => PollScreen::Dashboard, // Dashboard and IBD both need dashboard data
-            1 => PollScreen::KnownPeers,
-            _ => PollScreen::Other,
-        }
-    }
-}
 
 #[derive(Parser)]
 #[command(name = "knots-tui", about = "Bitcoin Knots node dashboard")]
@@ -131,17 +112,17 @@ async fn main() -> anyhow::Result<()> {
     let client = RpcClient::new(&args.rpc_url, &cookie);
 
     let (tx, mut rx) = mpsc::channel::<NodeData>(4);
-    let current_screen = Arc::new(AtomicU8::new(0));
     let poll_notify = Arc::new(Notify::new());
+    let poll_active = Arc::new(AtomicBool::new(true));
     let signaling_notify = Arc::new(Notify::new());
     let signaling_progress = Arc::new(AtomicU16::new(0));
     let force_full_fetch = Arc::new(AtomicBool::new(false));
     let spinner_notify = Arc::new(Notify::new());
 
-    // Main poll loop
+    // Dashboard poll loop — only polls when poll_active is true
     let poll_client = client.clone();
-    let poll_screen = current_screen.clone();
     let poll_wake = poll_notify.clone();
+    let poll_is_active = poll_active.clone();
     let poll_tx = tx.clone();
     let poll_force = force_full_fetch.clone();
     let poll_spinner = spinner_notify.clone();
@@ -153,44 +134,36 @@ async fn main() -> anyhow::Result<()> {
         let mut last_full_fetch = tokio::time::Instant::now();
         let mut force_full = true;
         loop {
-            let screen = PollScreen::from_u8(poll_screen.load(Ordering::Relaxed));
+            if !poll_is_active.load(Ordering::Relaxed) {
+                poll_wake.notified().await;
+                continue;
+            }
             if poll_force.swap(false, Ordering::Relaxed) { force_full = true; }
-            let result = match screen {
-                PollScreen::Dashboard => {
-                    let mut need_full = force_full;
-                    force_full = false;
-                    if !need_full {
-                        if let Ok((h, c)) = poll_client.fetch_tip_and_peers().await {
-                            if h != last_height || c != last_conns { need_full = true; }
-                        }
-                    }
-                    if !need_full && last_full_fetch.elapsed() >= full_interval { need_full = true; }
-                    if need_full {
-                        let r = poll_client.fetch_dashboard().await;
-                        if let Ok(ref data) = r {
-                            last_height = data.blockchain.blocks;
-                            last_conns = data.network.connections;
-                            last_full_fetch = tokio::time::Instant::now();
-                        }
-                        Some(r)
-                    } else { poll_spinner.notify_one(); None }
+            let mut need_full = force_full;
+            force_full = false;
+            if !need_full {
+                if let Ok((h, c)) = poll_client.fetch_tip_and_peers().await {
+                    if h != last_height || c != last_conns { need_full = true; }
                 }
-                PollScreen::KnownPeers => Some(poll_client.fetch_known_peers().await),
-                PollScreen::Other => None,
-            };
-            if let Some(result) = result {
-                match result {
+            }
+            if !need_full && last_full_fetch.elapsed() >= full_interval { need_full = true; }
+            if need_full {
+                let r = poll_client.fetch_dashboard().await;
+                if let Ok(ref data) = r {
+                    last_height = data.blockchain.blocks;
+                    last_conns = data.network.connections;
+                    last_full_fetch = tokio::time::Instant::now();
+                }
+                match r {
                     Ok(data) => { let _ = poll_tx.send(data).await; }
                     Err(e) => { let _ = poll_tx.send(NodeData { error: Some(format!("{}", e)), ..Default::default() }).await; }
                 }
-            }
-            if screen == PollScreen::Dashboard {
-                tokio::select! {
-                    _ = tokio::time::sleep(quick_interval) => {}
-                    _ = poll_wake.notified() => {}
-                }
             } else {
-                poll_wake.notified().await;
+                poll_spinner.notify_one();
+            }
+            tokio::select! {
+                _ = tokio::time::sleep(quick_interval) => {}
+                _ = poll_wake.notified() => {}
             }
         }
     });
@@ -229,11 +202,11 @@ async fn main() -> anyhow::Result<()> {
     let (older_blocks_tx, mut older_blocks_rx) = mpsc::channel::<Vec<rpc::BlockInfo>>(1);
     let backfill_stop = Arc::new(AtomicBool::new(false));
 
-    let svc = AppService::new(
-        client.clone(), poll_notify.clone(), signaling_notify.clone(),
-        force_full_fetch.clone(), backfill_stop.clone(), current_screen.clone(),
-        stats_tx.clone(), older_blocks_tx.clone(),
-    );
+    let svc = Arc::new(AppService::new(
+        client.clone(), poll_notify.clone(), poll_active.clone(),
+        signaling_notify.clone(), force_full_fetch.clone(), backfill_stop.clone(),
+        tx.clone(), stats_tx.clone(), older_blocks_tx.clone(),
+    ));
 
     let mut state = SharedState {
         node_data: NodeData::default(),
@@ -249,16 +222,15 @@ async fn main() -> anyhow::Result<()> {
         },
         system_stats: SystemStats::default(),
         rpc_spinner: 0,
-        fetching_older_blocks: false,
     };
 
     let mut screens: Vec<Box<dyn ScreenTrait>> = vec![
-        Box::new(ui::dashboard::DashboardScreen::new()),  // 0
-        Box::new(ui::known_peers::KnownPeersScreen::new()), // 1
-        Box::new(ui::signaling::SignalingScreen::new()),   // 2
-        Box::new(ui::analytics::AnalyticsScreen::new()),   // 3
-        Box::new(ui::charts::ChartsScreen::new()),         // 4
-        Box::new(ui::ibd::IbdScreen::new()),               // 5
+        Box::new(ui::dashboard::DashboardScreen::new(svc.clone())),
+        Box::new(ui::known_peers::KnownPeersScreen::new(svc.clone())),
+        Box::new(ui::signaling::SignalingScreen::new(svc.clone())),
+        Box::new(ui::analytics::AnalyticsScreen::new(svc.clone())),
+        Box::new(ui::charts::ChartsScreen::new(svc.clone())),
+        Box::new(ui::ibd::IbdScreen::new(svc.clone())),
     ];
     let mut active: usize = 0;
 
@@ -270,14 +242,14 @@ async fn main() -> anyhow::Result<()> {
 
     let mut event_stream = EventStream::new();
 
-    // Initial render
-    terminal.draw(|f| ui::draw(f, screens[active].as_ref(), &state))?;
+    terminal.draw(|f| ui::draw(f, screens[active].as_ref(), &state, &svc))?;
 
     loop {
         let mut redraw = false;
 
         tokio::select! {
             Some(mut data) = rx.recv() => {
+                svc.set_loading(false);
                 if !data.recent_block_versions.is_empty() {
                     state.signaling_data = data.clone();
                 }
@@ -370,7 +342,7 @@ async fn main() -> anyhow::Result<()> {
                 redraw = true;
             }
             Some(blocks) = older_blocks_rx.recv() => {
-                state.fetching_older_blocks = false;
+                svc.clear_fetching_older_blocks();
                 let existing: std::collections::HashSet<u64> = state.node_data.recent_blocks.iter().map(|b| b.height).collect();
                 for b in blocks {
                     if !existing.contains(&b.height) { state.node_data.recent_blocks.push(b); }
@@ -386,22 +358,20 @@ async fn main() -> anyhow::Result<()> {
                     if key.kind == KeyEventKind::Press {
                         redraw = true;
                         if screens[active].has_modal() {
-                            screens[active].handle_modal_key(key.code, &mut state, &svc);
+                            screens[active].handle_modal_key(key.code, &mut state);
                         } else {
                             match key.code {
                                 KeyCode::Char('q') => break,
                                 KeyCode::Tab => {
                                     active = ui::next_screen(active, &screens, &state);
-                                    svc.set_screen(active as u8);
-                                    screens[active].on_enter(&svc);
+                                    screens[active].on_enter();
                                 }
                                 KeyCode::BackTab => {
                                     active = ui::prev_screen(active, &screens, &state);
-                                    svc.set_screen(active as u8);
-                                    screens[active].on_enter(&svc);
+                                    screens[active].on_enter();
                                 }
                                 _ => {
-                                    let result = screens[active].handle_key(key.code, &mut state, &svc);
+                                    let result = screens[active].handle_key(key.code, &mut state);
                                     if result == ui::KeyResult::Quit { break; }
                                 }
                             }
@@ -413,18 +383,16 @@ async fn main() -> anyhow::Result<()> {
             }
         }
 
-        // Auto-switch between Dashboard and IBD based on node state
         if redraw {
             let is_ibd = state.node_data.blockchain.initialblockdownload;
             if is_ibd && active == SCREEN_DASHBOARD {
                 active = SCREEN_IBD;
-                svc.set_screen(active as u8);
+                screens[active].on_enter();
             } else if !is_ibd && active == SCREEN_IBD {
                 active = SCREEN_DASHBOARD;
-                svc.set_screen(active as u8);
-                screens[active].on_enter(&svc);
+                screens[active].on_enter();
             }
-            terminal.draw(|f| ui::draw(f, screens[active].as_ref(), &state))?;
+            terminal.draw(|f| ui::draw(f, screens[active].as_ref(), &state, &svc))?;
         }
     }
 
