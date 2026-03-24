@@ -1,6 +1,6 @@
 use crate::rpc::{BlockInfo, BlockStats, NodeData, RpcClient};
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Arc;
 use tokio::sync::{mpsc, Notify};
 
@@ -13,6 +13,7 @@ pub struct AppService {
     backfill_stop: Arc<AtomicBool>,
     loading: AtomicBool,
     fetching_older: AtomicBool,
+    rpc_spinner: AtomicU8,
     data_tx: mpsc::Sender<NodeData>,
     stats_tx: mpsc::Sender<BlockStats>,
     older_blocks_tx: mpsc::Sender<Vec<BlockInfo>>,
@@ -33,8 +34,9 @@ impl AppService {
         Self {
             client, poll_notify, poll_active, signaling_notify,
             force_full_fetch, backfill_stop,
-            loading: AtomicBool::new(true), // loading until first data
+            loading: AtomicBool::new(true),
             fetching_older: AtomicBool::new(false),
+            rpc_spinner: AtomicU8::new(0),
             data_tx, stats_tx, older_blocks_tx,
         }
     }
@@ -44,6 +46,9 @@ impl AppService {
 
     pub fn is_fetching_older_blocks(&self) -> bool { self.fetching_older.load(Ordering::Relaxed) }
     pub fn clear_fetching_older_blocks(&self) { self.fetching_older.store(false, Ordering::Relaxed); }
+
+    pub fn inc_spinner(&self) { self.rpc_spinner.fetch_add(1, Ordering::Relaxed); }
+    pub fn spinner(&self) -> u8 { self.rpc_spinner.load(Ordering::Relaxed) }
 
     pub fn force_refresh(&self) {
         self.force_full_fetch.store(true, Ordering::Relaxed);
@@ -98,15 +103,10 @@ impl AppService {
         cached: &HashSet<u64>,
     ) -> u64 {
         let recent: Vec<(u64, String)> = recent_blocks
-            .iter()
-            .filter(|(h, _)| !cached.contains(h))
-            .cloned()
-            .collect();
+            .iter().filter(|(h, _)| !cached.contains(h)).cloned().collect();
         let recent_heights: HashSet<u64> = recent.iter().map(|(h, _)| *h).collect();
         let backfill: Vec<u64> = analytics_heights
-            .into_iter()
-            .filter(|h| !cached.contains(h) && !recent_heights.contains(h))
-            .collect();
+            .into_iter().filter(|h| !cached.contains(h) && !recent_heights.contains(h)).collect();
 
         let total = (recent.len() + backfill.len()) as u64;
         if total == 0 { return 0; }
@@ -128,7 +128,6 @@ impl AppService {
                 }
             }
         });
-
         total
     }
 

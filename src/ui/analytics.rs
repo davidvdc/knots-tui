@@ -7,16 +7,17 @@ use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
 use super::common::{format_compact, format_number, pct_str};
-use super::{KeyResult, Screen, SharedState};
+use super::{KeyResult, Screen, StateRef};
 
 pub struct AnalyticsScreen {
     svc: Arc<AppService>,
+    state: StateRef,
     scroll: u16,
 }
 
 impl AnalyticsScreen {
-    pub fn new(svc: Arc<AppService>) -> Self {
-        Self { svc, scroll: 0 }
+    pub fn new(svc: Arc<AppService>, state: StateRef) -> Self {
+        Self { svc, state, scroll: 0 }
     }
 }
 
@@ -27,7 +28,8 @@ impl Screen for AnalyticsScreen {
         " q: quit | Tab: charts | ↑/↓: scroll | +: extend 30 days | Esc: stop "
     }
 
-    fn draw(&self, f: &mut Frame, area: Rect, state: &SharedState) {
+    fn draw(&self, f: &mut Frame, area: Rect) {
+        let state = self.state.borrow();
         let analytics = &state.analytics;
         match analytics.state {
             AnalyticsState::Idle => {
@@ -86,7 +88,8 @@ impl Screen for AnalyticsScreen {
         }
     }
 
-    fn handle_key(&mut self, key: KeyCode, state: &mut SharedState) -> KeyResult {
+    fn handle_key(&mut self, key: KeyCode) -> KeyResult {
+        let mut state = self.state.borrow_mut();
         match key {
             KeyCode::Down => { self.scroll = self.scroll.saturating_add(1); KeyResult::None }
             KeyCode::Up => { self.scroll = self.scroll.saturating_sub(1); KeyResult::None }
@@ -121,8 +124,8 @@ impl Screen for AnalyticsScreen {
         }
     }
 
-    fn available(&self, state: &SharedState) -> bool {
-        !state.node_data.blockchain.initialblockdownload
+    fn available(&self) -> bool {
+        !self.state.borrow().node_data.blockchain.initialblockdownload
     }
 
     fn on_enter(&mut self) {

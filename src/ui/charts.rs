@@ -5,16 +5,17 @@ use ratatui::{prelude::*, symbols, widgets::*};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use super::{KeyResult, Screen, SharedState};
+use super::{KeyResult, Screen, StateRef};
 
 pub struct ChartsScreen {
     svc: Arc<AppService>,
+    state: StateRef,
     chart_mode: u8,
 }
 
 impl ChartsScreen {
-    pub fn new(svc: Arc<AppService>) -> Self {
-        Self { svc, chart_mode: 0 }
+    pub fn new(svc: Arc<AppService>, state: StateRef) -> Self {
+        Self { svc, state, chart_mode: 0 }
     }
 }
 
@@ -31,11 +32,12 @@ impl Screen for ChartsScreen {
         " q: quit | Tab: dashboard | j/k: switch metric "
     }
 
-    fn draw(&self, f: &mut Frame, area: Rect, state: &SharedState) {
+    fn draw(&self, f: &mut Frame, area: Rect) {
+        let state = self.state.borrow();
         draw_charts(f, area, &state.analytics, self.chart_mode);
     }
 
-    fn handle_key(&mut self, key: KeyCode, _state: &mut SharedState) -> KeyResult {
+    fn handle_key(&mut self, key: KeyCode) -> KeyResult {
         match key {
             KeyCode::Char('j') => { self.chart_mode = (self.chart_mode + 1) % 3; KeyResult::None }
             KeyCode::Char('k') => { self.chart_mode = self.chart_mode.checked_sub(1).unwrap_or(2); KeyResult::None }
@@ -44,8 +46,8 @@ impl Screen for ChartsScreen {
         }
     }
 
-    fn available(&self, state: &SharedState) -> bool {
-        !state.node_data.blockchain.initialblockdownload
+    fn available(&self) -> bool {
+        !self.state.borrow().node_data.blockchain.initialblockdownload
     }
 
     fn on_enter(&mut self) {

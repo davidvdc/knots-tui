@@ -11,8 +11,10 @@ use crossterm::{
 };
 use futures::StreamExt;
 use ratatui::prelude::*;
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::io::stdout;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -45,9 +47,7 @@ fn load_stats_from_file() -> Vec<BlockStats> {
     let mut stats = Vec::new();
     if let Ok(content) = std::fs::read_to_string(&path) {
         for line in content.lines() {
-            if let Ok(s) = serde_json::from_str::<BlockStats>(line) {
-                stats.push(s);
-            }
+            if let Ok(s) = serde_json::from_str::<BlockStats>(line) { stats.push(s); }
         }
     }
     stats
@@ -58,19 +58,13 @@ fn rewrite_stats_file(stats: &[BlockStats]) {
     let path = stats_file_path();
     if let Ok(mut f) = std::fs::File::create(&path) {
         for s in stats {
-            if let Ok(line) = serde_json::to_string(s) {
-                let _ = writeln!(f, "{}", line);
-            }
+            if let Ok(line) = serde_json::to_string(s) { let _ = writeln!(f, "{}", line); }
         }
     }
 }
 
 #[derive(Clone, PartialEq)]
-pub enum AnalyticsState {
-    Idle,
-    Running,
-    Done,
-}
+pub enum AnalyticsState { Idle, Running, Done }
 
 pub struct AnalyticsData {
     pub state: AnalyticsState,
@@ -110,7 +104,6 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let client = RpcClient::new(&args.rpc_url, &cookie);
-
     let (tx, mut rx) = mpsc::channel::<NodeData>(4);
     let poll_notify = Arc::new(Notify::new());
     let poll_active = Arc::new(AtomicBool::new(true));
@@ -119,7 +112,7 @@ async fn main() -> anyhow::Result<()> {
     let force_full_fetch = Arc::new(AtomicBool::new(false));
     let spinner_notify = Arc::new(Notify::new());
 
-    // Dashboard poll loop — only polls when poll_active is true
+    // Dashboard poll loop
     let poll_client = client.clone();
     let poll_wake = poll_notify.clone();
     let poll_is_active = poll_active.clone();
@@ -148,14 +141,13 @@ async fn main() -> anyhow::Result<()> {
             }
             if !need_full && last_full_fetch.elapsed() >= full_interval { need_full = true; }
             if need_full {
-                let r = poll_client.fetch_dashboard().await;
-                if let Ok(ref data) = r {
-                    last_height = data.blockchain.blocks;
-                    last_conns = data.network.connections;
-                    last_full_fetch = tokio::time::Instant::now();
-                }
-                match r {
-                    Ok(data) => { let _ = poll_tx.send(data).await; }
+                match poll_client.fetch_dashboard().await {
+                    Ok(data) => {
+                        last_height = data.blockchain.blocks;
+                        last_conns = data.network.connections;
+                        last_full_fetch = tokio::time::Instant::now();
+                        let _ = poll_tx.send(data).await;
+                    }
                     Err(e) => { let _ = poll_tx.send(NodeData { error: Some(format!("{}", e)), ..Default::default() }).await; }
                 }
             } else {
@@ -208,29 +200,24 @@ async fn main() -> anyhow::Result<()> {
         tx.clone(), stats_tx.clone(), older_blocks_tx.clone(),
     ));
 
-    let mut state = SharedState {
+    let state_cell: Rc<RefCell<SharedState>> = Rc::new(RefCell::new(SharedState {
         node_data: NodeData::default(),
         signaling_data: NodeData::default(),
         block_stats_cache: HashMap::new(),
         analytics: AnalyticsData {
-            state: AnalyticsState::Idle,
-            stats: Vec::new(),
-            progress_current: 0,
-            progress_total: 0,
-            missing_blocks: 0,
-            depth: 4320,
+            state: AnalyticsState::Idle, stats: Vec::new(),
+            progress_current: 0, progress_total: 0, missing_blocks: 0, depth: 4320,
         },
         system_stats: SystemStats::default(),
-        rpc_spinner: 0,
-    };
+    }));
 
     let mut screens: Vec<Box<dyn ScreenTrait>> = vec![
-        Box::new(ui::dashboard::DashboardScreen::new(svc.clone())),
-        Box::new(ui::known_peers::KnownPeersScreen::new(svc.clone())),
-        Box::new(ui::signaling::SignalingScreen::new(svc.clone())),
-        Box::new(ui::analytics::AnalyticsScreen::new(svc.clone())),
-        Box::new(ui::charts::ChartsScreen::new(svc.clone())),
-        Box::new(ui::ibd::IbdScreen::new(svc.clone())),
+        Box::new(ui::dashboard::DashboardScreen::new(svc.clone(), state_cell.clone())),
+        Box::new(ui::known_peers::KnownPeersScreen::new(svc.clone(), state_cell.clone())),
+        Box::new(ui::signaling::SignalingScreen::new(svc.clone(), state_cell.clone())),
+        Box::new(ui::analytics::AnalyticsScreen::new(svc.clone(), state_cell.clone())),
+        Box::new(ui::charts::ChartsScreen::new(svc.clone(), state_cell.clone())),
+        Box::new(ui::ibd::IbdScreen::new(svc.clone(), state_cell.clone())),
     ];
     let mut active: usize = 0;
 
@@ -242,7 +229,10 @@ async fn main() -> anyhow::Result<()> {
 
     let mut event_stream = EventStream::new();
 
-    terminal.draw(|f| ui::draw(f, screens[active].as_ref(), &state, &svc))?;
+    {
+        let state = state_cell.borrow();
+        terminal.draw(|f| ui::draw(f, screens[active].as_ref(), &state, &svc))?;
+    }
 
     loop {
         let mut redraw = false;
@@ -250,6 +240,8 @@ async fn main() -> anyhow::Result<()> {
         tokio::select! {
             Some(mut data) = rx.recv() => {
                 svc.set_loading(false);
+                svc.inc_spinner();
+                let mut state = state_cell.borrow_mut();
                 if !data.recent_block_versions.is_empty() {
                     state.signaling_data = data.clone();
                 }
@@ -288,8 +280,7 @@ async fn main() -> anyhow::Result<()> {
                     } else if new_tip > last_tip_height && last_tip_height > 0 && !is_ibd {
                         let new_blocks: Vec<(u64, String)> = data.recent_blocks.iter()
                             .filter(|b| b.height > last_tip_height && !state.block_stats_cache.contains_key(&b.height))
-                            .map(|b| (b.height, b.hash.clone()))
-                            .collect();
+                            .map(|b| (b.height, b.hash.clone())).collect();
                         svc.fetch_new_block_stats(new_blocks);
                     }
                     last_tip_height = new_tip;
@@ -317,15 +308,17 @@ async fn main() -> anyhow::Result<()> {
                     state.node_data.known_peers = data.known_peers;
                     state.node_data.known_addresses = data.known_addresses;
                 }
-                state.rpc_spinner = state.rpc_spinner.wrapping_add(1);
+                drop(state);
                 redraw = true;
             }
             _ = spinner_notify.notified() => {
-                state.rpc_spinner = state.rpc_spinner.wrapping_add(1);
+                svc.inc_spinner();
                 redraw = true;
             }
             Some(stat) = stats_rx.recv() => {
                 append_stats_to_file(&stat);
+                svc.inc_spinner();
+                let mut state = state_cell.borrow_mut();
                 state.block_stats_cache.insert(stat.height, stat.clone());
                 if !state.analytics.stats.iter().any(|e| e.height == stat.height) {
                     state.analytics.stats.push(stat);
@@ -338,41 +331,45 @@ async fn main() -> anyhow::Result<()> {
                         state.analytics.stats.sort_by_key(|s| s.height);
                     }
                 }
-                state.rpc_spinner = state.rpc_spinner.wrapping_add(1);
+                drop(state);
                 redraw = true;
             }
             Some(blocks) = older_blocks_rx.recv() => {
                 svc.clear_fetching_older_blocks();
+                let mut state = state_cell.borrow_mut();
                 let existing: std::collections::HashSet<u64> = state.node_data.recent_blocks.iter().map(|b| b.height).collect();
                 for b in blocks {
                     if !existing.contains(&b.height) { state.node_data.recent_blocks.push(b); }
                 }
+                drop(state);
                 redraw = true;
             }
             Some(sys) = sys_rx.recv() => {
+                let mut state = state_cell.borrow_mut();
+                let in_ibd = state.node_data.blockchain.initialblockdownload;
                 state.system_stats = sys;
-                if state.node_data.blockchain.initialblockdownload { redraw = true; }
+                drop(state);
+                if in_ibd { redraw = true; }
             }
             Some(Ok(event)) = event_stream.next() => {
                 if let Event::Key(key) = event {
                     if key.kind == KeyEventKind::Press {
                         redraw = true;
                         if screens[active].has_modal() {
-                            screens[active].handle_modal_key(key.code, &mut state);
+                            screens[active].handle_modal_key(key.code);
                         } else {
                             match key.code {
                                 KeyCode::Char('q') => break,
                                 KeyCode::Tab => {
-                                    active = ui::next_screen(active, &screens, &state);
+                                    active = ui::next_screen(active, &screens);
                                     screens[active].on_enter();
                                 }
                                 KeyCode::BackTab => {
-                                    active = ui::prev_screen(active, &screens, &state);
+                                    active = ui::prev_screen(active, &screens);
                                     screens[active].on_enter();
                                 }
                                 _ => {
-                                    let result = screens[active].handle_key(key.code, &mut state);
-                                    if result == ui::KeyResult::Quit { break; }
+                                    if screens[active].handle_key(key.code) == ui::KeyResult::Quit { break; }
                                 }
                             }
                         }
@@ -384,7 +381,7 @@ async fn main() -> anyhow::Result<()> {
         }
 
         if redraw {
-            let is_ibd = state.node_data.blockchain.initialblockdownload;
+            let is_ibd = state_cell.borrow().node_data.blockchain.initialblockdownload;
             if is_ibd && active == SCREEN_DASHBOARD {
                 active = SCREEN_IBD;
                 screens[active].on_enter();
@@ -392,6 +389,7 @@ async fn main() -> anyhow::Result<()> {
                 active = SCREEN_DASHBOARD;
                 screens[active].on_enter();
             }
+            let state = state_cell.borrow();
             terminal.draw(|f| ui::draw(f, screens[active].as_ref(), &state, &svc))?;
         }
     }

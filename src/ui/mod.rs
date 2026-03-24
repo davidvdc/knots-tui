@@ -12,9 +12,13 @@ use crate::sys::SystemStats;
 use crate::{AnalyticsData, AnalyticsState};
 use crossterm::event::KeyCode;
 use ratatui::{prelude::*, widgets::*};
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use common::format_duration;
+
+pub type StateRef = Rc<RefCell<SharedState>>;
 
 pub struct SharedState {
     pub node_data: NodeData,
@@ -22,7 +26,6 @@ pub struct SharedState {
     pub block_stats_cache: HashMap<u64, BlockStats>,
     pub analytics: AnalyticsData,
     pub system_stats: SystemStats,
-    pub rpc_spinner: u8,
 }
 
 #[derive(PartialEq)]
@@ -34,16 +37,14 @@ pub enum KeyResult {
 pub trait Screen {
     fn name(&self) -> &str;
     fn footer_hint(&self) -> &str;
-    fn draw(&self, f: &mut Frame, area: Rect, state: &SharedState);
-    fn handle_key(&mut self, key: KeyCode, state: &mut SharedState) -> KeyResult;
+    fn draw(&self, f: &mut Frame, area: Rect);
+    fn handle_key(&mut self, key: KeyCode) -> KeyResult;
 
     fn has_modal(&self) -> bool { false }
-    fn draw_modal(&self, _f: &mut Frame, _area: Rect, _state: &SharedState) {}
-    fn handle_modal_key(&mut self, _key: KeyCode, _state: &mut SharedState) {}
+    fn draw_modal(&self, _f: &mut Frame, _area: Rect) {}
+    fn handle_modal_key(&mut self, _key: KeyCode) {}
 
-    fn available(&self, _state: &SharedState) -> bool { true }
-
-    /// Called when switching to this screen
+    fn available(&self) -> bool { true }
     fn on_enter(&mut self) {}
 }
 
@@ -60,11 +61,11 @@ pub fn draw(f: &mut Frame, screen: &dyn Screen, state: &SharedState, svc: &AppSe
         .split(area);
 
     draw_header(f, outer[0], &state.node_data, screen.name(), svc.is_loading());
-    screen.draw(f, outer[1], state);
-    draw_footer(f, outer[2], screen.footer_hint(), state.rpc_spinner);
+    screen.draw(f, outer[1]);
+    draw_footer(f, outer[2], screen.footer_hint(), svc.spinner());
 
     if screen.has_modal() {
-        screen.draw_modal(f, area, state);
+        screen.draw_modal(f, area);
     }
 }
 
@@ -116,20 +117,20 @@ fn draw_footer(f: &mut Frame, area: Rect, hint: &str, rpc_spinner: u8) {
     f.render_widget(footer, area);
 }
 
-pub fn next_screen(current: usize, screens: &[Box<dyn Screen>], state: &SharedState) -> usize {
+pub fn next_screen(current: usize, screens: &[Box<dyn Screen>]) -> usize {
     let n = screens.len();
     for i in 1..=n {
         let idx = (current + i) % n;
-        if screens[idx].available(state) { return idx; }
+        if screens[idx].available() { return idx; }
     }
     current
 }
 
-pub fn prev_screen(current: usize, screens: &[Box<dyn Screen>], state: &SharedState) -> usize {
+pub fn prev_screen(current: usize, screens: &[Box<dyn Screen>]) -> usize {
     let n = screens.len();
     for i in 1..=n {
         let idx = (current + n - i) % n;
-        if screens[idx].available(state) { return idx; }
+        if screens[idx].available() { return idx; }
     }
     current
 }

@@ -6,16 +6,17 @@ use std::sync::Arc;
 
 use super::common::{format_bytes, format_bytes_short, format_duration, format_number};
 use super::dashboard::draw_peers_table;
-use super::{KeyResult, Screen, SharedState};
+use super::{KeyResult, Screen, StateRef};
 
 pub struct IbdScreen {
     svc: Arc<AppService>,
+    state: StateRef,
     peer_scroll: u16,
 }
 
 impl IbdScreen {
-    pub fn new(svc: Arc<AppService>) -> Self {
-        Self { svc, peer_scroll: 0 }
+    pub fn new(svc: Arc<AppService>, state: StateRef) -> Self {
+        Self { svc, state, peer_scroll: 0 }
     }
 }
 
@@ -26,11 +27,12 @@ impl Screen for IbdScreen {
         " q: quit | Tab: switch screen | ↑/↓: scroll peers | r: refresh "
     }
 
-    fn draw(&self, f: &mut Frame, area: Rect, state: &SharedState) {
+    fn draw(&self, f: &mut Frame, area: Rect) {
+        let state = self.state.borrow();
         draw_ibd(f, area, &state.node_data, self.peer_scroll, &state.system_stats);
     }
 
-    fn handle_key(&mut self, key: KeyCode, _state: &mut SharedState) -> KeyResult {
+    fn handle_key(&mut self, key: KeyCode) -> KeyResult {
         match key {
             KeyCode::Down => { self.peer_scroll = self.peer_scroll.saturating_add(1); KeyResult::None }
             KeyCode::Up => { self.peer_scroll = self.peer_scroll.saturating_sub(1); KeyResult::None }
@@ -40,8 +42,8 @@ impl Screen for IbdScreen {
         }
     }
 
-    fn available(&self, state: &SharedState) -> bool {
-        state.node_data.blockchain.initialblockdownload
+    fn available(&self) -> bool {
+        self.state.borrow().node_data.blockchain.initialblockdownload
     }
 
     fn on_enter(&mut self) {

@@ -8,10 +8,11 @@ use std::sync::Arc;
 
 use super::analytics::{aggregate_period, analytics_data_row, analytics_header_row, analytics_widths};
 use super::common::*;
-use super::{KeyResult, Screen, SharedState};
+use super::{KeyResult, Screen, StateRef};
 
 pub struct DashboardScreen {
     svc: Arc<AppService>,
+    state: StateRef,
     blocks_focused: bool,
     selected_block: u16,
     block_scroll: u16,
@@ -20,8 +21,8 @@ pub struct DashboardScreen {
 }
 
 impl DashboardScreen {
-    pub fn new(svc: Arc<AppService>) -> Self {
-        Self { svc, blocks_focused: true, selected_block: 0, block_scroll: 0, peer_scroll: 0, show_block_modal: false }
+    pub fn new(svc: Arc<AppService>, state: StateRef) -> Self {
+        Self { svc, state, blocks_focused: true, selected_block: 0, block_scroll: 0, peer_scroll: 0, show_block_modal: false }
     }
 }
 
@@ -32,7 +33,8 @@ impl Screen for DashboardScreen {
         " q: quit | Tab: switch screen | j/k: switch table | ↑/↓: navigate | r: refresh "
     }
 
-    fn draw(&self, f: &mut Frame, area: Rect, state: &SharedState) {
+    fn draw(&self, f: &mut Frame, area: Rect) {
+        let state = self.state.borrow();
         let data = &state.node_data;
 
         if let Some(ref err) = data.error {
@@ -82,7 +84,8 @@ impl Screen for DashboardScreen {
         draw_peers_table(f, bottom_rows[2], data, self.peer_scroll, !self.blocks_focused);
     }
 
-    fn handle_key(&mut self, key: KeyCode, state: &mut SharedState) -> KeyResult {
+    fn handle_key(&mut self, key: KeyCode) -> KeyResult {
+        let state = self.state.borrow();
         match key {
             KeyCode::Down => {
                 if self.blocks_focused {
@@ -130,7 +133,8 @@ impl Screen for DashboardScreen {
 
     fn has_modal(&self) -> bool { self.show_block_modal }
 
-    fn draw_modal(&self, f: &mut Frame, area: Rect, state: &SharedState) {
+    fn draw_modal(&self, f: &mut Frame, area: Rect) {
+        let state = self.state.borrow();
         if let Some(b) = state.node_data.recent_blocks.get(self.selected_block as usize) {
             if let Some(s) = state.block_stats_cache.get(&b.height) {
                 draw_block_modal(f, area, b, s);
@@ -138,7 +142,8 @@ impl Screen for DashboardScreen {
         }
     }
 
-    fn handle_modal_key(&mut self, key: KeyCode, state: &mut SharedState) {
+    fn handle_modal_key(&mut self, key: KeyCode) {
+        let state = self.state.borrow();
         match key {
             KeyCode::Esc | KeyCode::Char('q') => { self.show_block_modal = false; }
             KeyCode::Down => {
@@ -163,13 +168,13 @@ impl Screen for DashboardScreen {
         }
     }
 
-    fn available(&self, state: &SharedState) -> bool {
-        !state.node_data.blockchain.initialblockdownload
+    fn available(&self) -> bool {
+        !self.state.borrow().node_data.blockchain.initialblockdownload
     }
 
     fn on_enter(&mut self) {
         self.svc.set_loading(true);
-        self.svc.start_polling();
+        self.svc.force_refresh();
     }
 }
 
@@ -208,19 +213,15 @@ fn draw_block_modal(f: &mut Frame, area: Rect, block: &BlockInfo, stats: &BlockS
     let x = (area.width.saturating_sub(modal_width)) / 2;
     let y = (area.height.saturating_sub(modal_height)) / 2;
     let modal_area = Rect::new(x, y, modal_width, modal_height);
-
     let dim = Block::default().style(Style::default().bg(Color::Black));
-    f.render_widget(Clear, modal_area);
-    f.render_widget(dim, area);
+    f.render_widget(Clear, modal_area); f.render_widget(dim, area);
 
     let user_tx = stats.tx_count.saturating_sub(1);
     let data_count = user_tx.saturating_sub(stats.financial_count);
     let data_vsize = stats.total_vsize.saturating_sub(stats.financial_vsize);
     let pct = |count: usize| -> f64 { if user_tx > 0 { (count as f64 / user_tx as f64) * 100.0 } else { 0.0 } };
-    let fin_pct = pct(stats.financial_count);
-    let data_pct = pct(data_count);
-    let taproot_spend_pct = pct(stats.taproot_spend_count);
-    let taproot_output_pct = pct(stats.taproot_output_count);
+    let fin_pct = pct(stats.financial_count); let data_pct = pct(data_count);
+    let taproot_spend_pct = pct(stats.taproot_spend_count); let taproot_output_pct = pct(stats.taproot_output_count);
     let proto_color = |count: usize| -> Color { if count > 0 { Color::Yellow } else { Color::DarkGray } };
     let viol_color = |count: usize| -> Color { if count > 0 { Color::Red } else { Color::Green } };
 
@@ -254,8 +255,7 @@ fn draw_block_modal(f: &mut Frame, area: Rect, block: &BlockInfo, stats: &BlockS
             Span::styled(format!("{} ({:.1}%)", data_count, data_pct), Style::default().fg(if data_pct > 10.0 { Color::Red } else { Color::Yellow }).bold()),
             Span::styled(format!("  {:>5}% wt", format!("{:.1}", if stats.total_vsize > 0 { data_vsize as f64 / stats.total_vsize as f64 * 100.0 } else { 0.0 })), Style::default().fg(if data_pct > 10.0 { Color::Red } else { Color::Yellow })),
         ]),
-        Line::from(""),
-        Line::from(Span::styled("Protocol Breakdown", Style::default().fg(Color::Cyan).bold())),
+        Line::from(""), Line::from(Span::styled("Protocol Breakdown", Style::default().fg(Color::Cyan).bold())),
     ];
     let vsize_pct = |vs: u64| -> f64 { if stats.total_vsize > 0 { (vs as f64 / stats.total_vsize as f64) * 100.0 } else { 0.0 } };
     for (label, count, vsize, violations, desc) in &protocols {
@@ -293,8 +293,7 @@ fn draw_block_modal(f: &mut Frame, area: Rect, block: &BlockInfo, stats: &BlockS
 }
 
 fn draw_blockchain_card(f: &mut Frame, area: Rect, data: &NodeData) {
-    let bc = &data.blockchain;
-    let progress = bc.verificationprogress * 100.0;
+    let bc = &data.blockchain; let progress = bc.verificationprogress * 100.0;
     let synced = if progress >= 99.99 { "YES" } else { "syncing" };
     let lines = vec![
         Line::from(vec![Span::styled("Height:  ", Style::default().fg(Color::DarkGray)), Span::styled(format_number(bc.blocks), Style::default().fg(Color::Yellow).bold())]),
@@ -305,8 +304,7 @@ fn draw_blockchain_card(f: &mut Frame, area: Rect, data: &NodeData) {
         Line::from(vec![Span::styled("Pruned:  ", Style::default().fg(Color::DarkGray)), Span::styled(if bc.pruned { "yes" } else { "no" }.to_string(), Style::default().fg(Color::White))]),
         Line::from(vec![Span::styled("IBD:     ", Style::default().fg(Color::DarkGray)), Span::styled(if bc.initialblockdownload { "yes" } else { "no" }.to_string(), Style::default().fg(if bc.initialblockdownload { Color::Yellow } else { Color::Green }))]),
     ];
-    let block = Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).title(" Blockchain ").title_style(Style::default().fg(Color::Cyan).bold());
-    f.render_widget(Paragraph::new(lines).block(block), area);
+    f.render_widget(Paragraph::new(lines).block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).title(" Blockchain ").title_style(Style::default().fg(Color::Cyan).bold())), area);
 }
 
 fn draw_mempool_card(f: &mut Frame, area: Rect, data: &NodeData) {
@@ -320,13 +318,11 @@ fn draw_mempool_card(f: &mut Frame, area: Rect, data: &NodeData) {
         Line::from(vec![Span::styled("Relay fee:", Style::default().fg(Color::DarkGray)), Span::styled(format!(" {:.8} BTC/kvB", mp.minrelaytxfee), Style::default().fg(Color::White))]),
         Line::from(vec![Span::styled("Loaded:   ", Style::default().fg(Color::DarkGray)), Span::styled(if mp.loaded { "yes" } else { "no" }.to_string(), Style::default().fg(if mp.loaded { Color::Green } else { Color::Yellow }))]),
     ];
-    let block = Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).title(" Mempool ").title_style(Style::default().fg(Color::Magenta).bold());
-    f.render_widget(Paragraph::new(lines).block(block), area);
+    f.render_widget(Paragraph::new(lines).block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).title(" Mempool ").title_style(Style::default().fg(Color::Magenta).bold())), area);
 }
 
 fn draw_network_card(f: &mut Frame, area: Rect, data: &NodeData) {
-    let net = &data.network;
-    let nt = &data.net_totals;
+    let net = &data.network; let nt = &data.net_totals;
     let mut all_lines = vec![
         Line::from(vec![Span::styled("Conns:    ", Style::default().fg(Color::DarkGray)), Span::styled(format!("{} (in: {} / out: {})", net.connections, net.connections_in, net.connections_out), Style::default().fg(Color::Yellow).bold())]),
         Line::from(vec![Span::styled("Protocol: ", Style::default().fg(Color::DarkGray)), Span::styled(format!("{}", net.protocolversion), Style::default().fg(Color::White))]),
@@ -339,37 +335,30 @@ fn draw_network_card(f: &mut Frame, area: Rect, data: &NodeData) {
         let addrs: Vec<String> = net.localaddresses.iter().map(|a| format!("{}:{}", a.address, a.port)).collect();
         all_lines.push(Line::from(vec![Span::styled("Local:    ", Style::default().fg(Color::DarkGray)), Span::styled(addrs.join(", "), Style::default().fg(Color::White))]));
     }
-    let block = Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).title(" Network ").title_style(Style::default().fg(Color::Green).bold());
-    f.render_widget(Paragraph::new(all_lines).block(block), area);
+    f.render_widget(Paragraph::new(all_lines).block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).title(" Network ").title_style(Style::default().fg(Color::Green).bold())), area);
 }
 
 fn draw_mining_card(f: &mut Frame, area: Rect, data: &NodeData) {
-    let mi = &data.mining;
-    let hashrate = format_hashrate(mi.networkhashps);
-    let warnings_text = data.blockchain.warnings.as_str();
+    let mi = &data.mining; let warnings_text = data.blockchain.warnings.as_str();
     let mut lines = vec![
-        Line::from(vec![Span::styled("Hashrate: ", Style::default().fg(Color::DarkGray)), Span::styled(hashrate, Style::default().fg(Color::Yellow).bold())]),
+        Line::from(vec![Span::styled("Hashrate: ", Style::default().fg(Color::DarkGray)), Span::styled(format_hashrate(mi.networkhashps), Style::default().fg(Color::Yellow).bold())]),
         Line::from(vec![Span::styled("Pooled TX:", Style::default().fg(Color::DarkGray)), Span::styled(format!(" {}", mi.pooledtx), Style::default().fg(Color::White))]),
     ];
     if !warnings_text.is_empty() {
-        lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled("Warnings:", Style::default().fg(Color::Red).bold())));
+        lines.push(Line::from("")); lines.push(Line::from(Span::styled("Warnings:", Style::default().fg(Color::Red).bold())));
         for chunk in warnings_text.as_bytes().chunks(area.width.saturating_sub(4) as usize) {
             if let Ok(s) = std::str::from_utf8(chunk) { lines.push(Line::from(Span::styled(s.to_string(), Style::default().fg(Color::Red)))); }
         }
     }
-    let block = Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).title(" Mining / Warnings ").title_style(Style::default().fg(Color::Yellow).bold());
-    f.render_widget(Paragraph::new(lines).block(block), area);
+    f.render_widget(Paragraph::new(lines).block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).title(" Mining / Warnings ").title_style(Style::default().fg(Color::Yellow).bold())), area);
 }
 
 fn draw_analytics_summary(f: &mut Frame, area: Rect, analytics: &AnalyticsData) {
-    let now = chrono::Utc::now().timestamp() as u64;
-    let cutoff = now.saturating_sub(86400);
+    let now = chrono::Utc::now().timestamp() as u64; let cutoff = now.saturating_sub(86400);
     let agg = aggregate_period(&analytics.stats, cutoff);
     let block = Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).title(" Analytics ").style(Style::default().fg(Color::Cyan));
     if agg.blocks > 0 {
-        let rows = vec![analytics_data_row("24h", &agg)];
-        f.render_widget(Table::new(rows, analytics_widths()).header(analytics_header_row()).block(block), area);
+        f.render_widget(Table::new(vec![analytics_data_row("24h", &agg)], analytics_widths()).header(analytics_header_row()).block(block), area);
     } else {
         f.render_widget(Paragraph::new(Line::from(Span::styled("  Waiting for block analysis data...", Style::default().fg(Color::DarkGray)))).block(block), area);
     }
@@ -378,8 +367,7 @@ fn draw_analytics_summary(f: &mut Frame, area: Rect, analytics: &AnalyticsData) 
 fn draw_blocks_table(f: &mut Frame, area: Rect, data: &NodeData, block_stats: &HashMap<u64, BlockStats>, selected_block: u16, block_scroll: u16, focused: bool) {
     let header = Row::new(vec![Cell::from(" "), Cell::from("Height"), Cell::from("Time"), Cell::from("TXs"), Cell::from("Size"), Cell::from("Weight"), Cell::from("Age"), Cell::from("BIP110"), Cell::from("BTC Out"), Cell::from("Fees"), Cell::from("Fin%"), Cell::from(Line::from("!110").alignment(Alignment::Right)), Cell::from("%")])
         .style(Style::default().fg(Color::Cyan).bold()).bottom_margin(0);
-    let now = chrono::Utc::now().timestamp() as u64;
-    let scroll = block_scroll as usize;
+    let now = chrono::Utc::now().timestamp() as u64; let scroll = block_scroll as usize;
     let visible_blocks: Vec<(usize, &BlockInfo)> = data.recent_blocks.iter().enumerate().skip(scroll).take(8).collect();
     let rows: Vec<Row> = visible_blocks.iter().map(|&(i, b)| {
         let age = if b.time > 0 && now > b.time { format_duration(now - b.time) } else { "-".to_string() };
@@ -403,7 +391,6 @@ fn draw_blocks_table(f: &mut Frame, area: Rect, data: &NodeData, block_stats: &H
     let total = data.recent_blocks.len();
     let title = format!(" Recent Blocks ({}-{}/{}) [Enter: detail] ", scroll + 1, (scroll + 8).min(total), total);
     let border_color = if focused { Color::Yellow } else { Color::default() };
-    let table = Table::new(rows, widths).header(header).block(
-        Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).border_style(Style::default().fg(border_color)).title(title).title_style(Style::default().fg(Color::Yellow).bold()));
-    f.render_widget(table, area);
+    f.render_widget(Table::new(rows, widths).header(header).block(
+        Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).border_style(Style::default().fg(border_color)).title(title).title_style(Style::default().fg(Color::Yellow).bold())), area);
 }

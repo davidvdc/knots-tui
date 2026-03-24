@@ -6,17 +6,18 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use super::common::format_number;
-use super::{KeyResult, Screen, SharedState};
+use super::{KeyResult, Screen, StateRef};
 
 pub struct SignalingScreen {
     svc: Arc<AppService>,
+    state: StateRef,
     selected_bit: u8,
     show_bit_modal: bool,
 }
 
 impl SignalingScreen {
-    pub fn new(svc: Arc<AppService>) -> Self {
-        Self { svc, selected_bit: 0, show_bit_modal: false }
+    pub fn new(svc: Arc<AppService>, state: StateRef) -> Self {
+        Self { svc, state, selected_bit: 0, show_bit_modal: false }
     }
 }
 
@@ -27,7 +28,8 @@ impl Screen for SignalingScreen {
         " q: quit | Tab: analytics | ↑/↓: select bit | Enter: details | r: refresh "
     }
 
-    fn draw(&self, f: &mut Frame, area: Rect, state: &SharedState) {
+    fn draw(&self, f: &mut Frame, area: Rect) {
+        let state = self.state.borrow();
         let data = &state.signaling_data;
         let layout = Layout::default()
             .direction(Direction::Vertical)
@@ -38,7 +40,7 @@ impl Screen for SignalingScreen {
         draw_softforks(f, layout[1], data);
     }
 
-    fn handle_key(&mut self, key: KeyCode, _state: &mut SharedState) -> KeyResult {
+    fn handle_key(&mut self, key: KeyCode) -> KeyResult {
         match key {
             KeyCode::Down => { self.selected_bit = (self.selected_bit + 1).min(28); KeyResult::None }
             KeyCode::Up => { self.selected_bit = self.selected_bit.saturating_sub(1); KeyResult::None }
@@ -51,11 +53,12 @@ impl Screen for SignalingScreen {
 
     fn has_modal(&self) -> bool { self.show_bit_modal }
 
-    fn draw_modal(&self, f: &mut Frame, area: Rect, state: &SharedState) {
+    fn draw_modal(&self, f: &mut Frame, area: Rect) {
+        let state = self.state.borrow();
         draw_bit_modal(f, area, self.selected_bit, &state.signaling_data);
     }
 
-    fn handle_modal_key(&mut self, key: KeyCode, _state: &mut SharedState) {
+    fn handle_modal_key(&mut self, key: KeyCode) {
         match key {
             KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => { self.show_bit_modal = false; }
             _ => {}
