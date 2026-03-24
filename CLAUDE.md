@@ -25,7 +25,7 @@ Or via env vars: `KNOTS_RPC_URL`, `KNOTS_COOKIE_FILE`. Default refresh interval 
 - `src/main.rs` — CLI args (clap), async event loop, terminal setup/teardown, data ingestion from channels
 - `src/service.rs` — `AppService`: async operations (polling, fetching, backfill), loading/spinner state (atomics)
 - `src/rpc.rs` — RPC client with batched JSON-RPC calls, all data structs (`NodeData`, `BlockInfo`, `BlockStats`, `PeerInfo`, etc.)
-- `src/sys.rs` — System stats sampler (CPU, memory, disk I/O from /proc)
+- `src/sys.rs` — System stats sampler (CPU, memory, disk I/O, process tracking from /proc)
 - `src/ui/mod.rs` — `Screen` trait, `SharedState`, `draw()` dispatcher (header/body/footer), screen navigation
 - `src/ui/dashboard.rs` — `DashboardScreen`: info cards, blocks table, peers table, block detail modal
 - `src/ui/ibd.rs` — `IbdScreen`: IBD progress, system stats bars, peers table
@@ -78,7 +78,7 @@ Safe because the app uses a single-threaded tokio runtime (`current_thread`).
 - `signaling_data: NodeData` — latest signaling data (separate from dashboard)
 - `block_stats_cache: HashMap<u64, BlockStats>` — per-block analysis results
 - `analytics: AnalyticsData` — backfill progress, stats collection, depth
-- `system_stats: SystemStats` — CPU, memory, disk I/O
+- `system_stats: SystemStats` — CPU, memory, disk I/O, bitcoind/tor process stats
 
 Main loop mutates SharedState when data arrives from channels. Screens read it during draw/key handling.
 
@@ -115,6 +115,17 @@ The dashboard poll loop runs as a tokio task controlled by `poll_active: AtomicB
 - `svc.set_loading(false)` when data arrives in main loop
 - Dashboard shows "Connecting..." screen before first RPC response
 
+## System stats & process tracking
+
+- `SystemSampler` reads `/proc` every 1 second: CPU per-core, memory, disk I/O, process stats
+- Memory uses htop-style "used" (excludes buffers/cached)
+- Process detection via `find_pid_by_name()`: scans `/proc/*/comm` (starts_with match) with `/proc/*/cmdline` fallback
+- **bitcoind**: detected by comm starting with "bitcoin" or containing "knots" (handles renamed binaries like `bitcoind2`)
+- **tor**: detected by comm starting with "tor"; only shown in System card when node has onion peers (`.onion` in peer addr or local addresses)
+- CPU% calculated from `/proc/[pid]/stat` utime+stime deltas between samples
+- RSS memory from `/proc/[pid]/statm` (pages * 4096)
+- Process stats hidden (not "not found") when process isn't running locally
+
 ## Block stats
 
 - `BlockStats` cached by height in `SharedState.block_stats_cache`
@@ -142,7 +153,13 @@ The dashboard poll loop runs as a tokio task controlled by `poll_active: AtomicB
 ## Screens
 
 ### Dashboard
-- 4 info cards (blockchain, mempool, network, mining/warnings) — fixed 9 rows
+- 4 info cards — fixed 9 rows:
+  - **Blockchain**: height, headers, sync status, difficulty, hashrate, disk (with pruned indicator)
+  - **Mempool**: txs, size, memory, fees, relay/min fee, loaded status
+  - **Network**: connections, protocol, recv/sent totals, relay/incremental fee, local addresses
+  - **System**: CPU avg%, memory (htop-style used, excludes buffers/cached), disk I/O totals, bitcoind process CPU%/RSS, tor process CPU%/RSS (shown only when node has onion peers)
+- System stats update every 1 second
+- Warnings shown via `F1` popup modal (footer hint only appears when warnings exist)
 - Recent blocks table (last 8) — fixed 11 rows
   - Always shows: Height, TXs, Size, Weight, Age, BIP110, BTC Out, Fees, Fin%, >83B
   - Financial columns show `-` when stats not loaded
