@@ -432,11 +432,22 @@ fn draw_system_card(f: &mut Frame, area: Rect, sys: &SystemStats, uses_tor: bool
     // Disk IO
     let disk_r: u64 = sys.disks.iter().map(|d| d.read_per_sec).sum();
     let disk_w: u64 = sys.disks.iter().map(|d| d.write_per_sec).sum();
-    lines.push(Line::from(vec![
-        Span::styled("IO  ", gray),
-        Span::styled(format!("R {}/s", format_bytes_short(disk_r)), Style::default().fg(Color::Green)),
-        Span::styled(format!(" W {}/s", format_bytes_short(disk_w)), Style::default().fg(Color::Yellow)),
-    ]));
+    // Disk IO as column table: drives as columns, R/W as rows
+    let disks: Vec<&crate::sys::DiskIO> = sys.disks.iter().take(4).collect();
+    if !disks.is_empty() {
+        let dw = 6usize;
+        let mut hdr = vec![Span::styled("    ", gray)];
+        for d in &disks { hdr.push(Span::styled(format!("{:>dw$}", d.name), Style::default().fg(Color::Cyan))); }
+        lines.push(Line::from(hdr));
+
+        let mut r_row = vec![Span::styled("IO R", gray)];
+        for d in &disks { r_row.push(Span::styled(format!("{:>dw$}", format_bytes_short(d.read_per_sec).trim_start()), Style::default().fg(Color::Green))); }
+        lines.push(Line::from(r_row));
+
+        let mut w_row = vec![Span::styled("IO W", gray)];
+        for d in &disks { w_row.push(Span::styled(format!("{:>dw$}", format_bytes_short(d.write_per_sec).trim_start()), Style::default().fg(Color::Yellow))); }
+        lines.push(Line::from(w_row));
+    }
 
     f.render_widget(Paragraph::new(lines).block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).title(" System ").title_style(Style::default().fg(Color::Yellow).bold())), area);
 }
