@@ -12,7 +12,7 @@ pub struct CpuUsage {
 #[derive(Clone, Default)]
 pub struct MemUsage {
     pub total: u64,
-    pub used: u64,
+    pub used: u64,       // total - available (committed, not easily reclaimable)
     pub buffers: u64,
     pub cached: u64,
     pub swap_total: u64,
@@ -215,7 +215,7 @@ fn read_mem() -> MemUsage {
         }
     }
     let total = *m.get("MemTotal").unwrap_or(&0);
-    let free = *m.get("MemFree").unwrap_or(&0);
+    let available = *m.get("MemAvailable").unwrap_or(&0);
     let buffers = *m.get("Buffers").unwrap_or(&0);
     let cached = *m.get("Cached").unwrap_or(&0);
     let sreclaimable = *m.get("SReclaimable").unwrap_or(&0);
@@ -223,7 +223,7 @@ fn read_mem() -> MemUsage {
     let swap_free = *m.get("SwapFree").unwrap_or(&0);
     MemUsage {
         total,
-        used: total.saturating_sub(free + buffers + cached + sreclaimable),
+        used: total.saturating_sub(available),
         buffers,
         cached: cached + sreclaimable,
         swap_total,
