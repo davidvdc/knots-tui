@@ -2208,20 +2208,6 @@ fn chart_aggregate_hourly(stats: &[BlockStats], extract: impl Fn(&BlockStats) ->
     points
 }
 
-fn chart_est_bip110_vsize(s: &BlockStats) -> u64 {
-    let est = |v: usize, c: usize, vs: u64| -> u64 {
-        if c > 0 { (v as f64 / c as f64 * vs as f64) as u64 } else { 0 }
-    };
-    est(s.financial_bip110v, s.financial_count, s.financial_vsize)
-        + est(s.rune_bip110v, s.rune_count, s.rune_vsize)
-        + est(s.brc20_bip110v, s.brc20_count, s.brc20_vsize)
-        + est(s.inscription_bip110v, s.inscription_count, s.inscription_vsize)
-        + est(s.opnet_bip110v, s.opnet_count, s.opnet_vsize)
-        + est(s.stamp_bip110v, s.stamp_count, s.stamp_vsize)
-        + est(s.counterparty_bip110v, s.counterparty_count, s.counterparty_vsize)
-        + est(s.omni_bip110v, s.omni_count, s.omni_vsize)
-}
-
 fn draw_charts(f: &mut Frame, area: Rect, analytics: &AnalyticsData, chart_mode: u8) {
     if analytics.stats.is_empty() {
         let block = Block::default()
@@ -2249,8 +2235,8 @@ fn draw_charts(f: &mut Frame, area: Rect, analytics: &AnalyticsData, chart_mode:
             chart_aggregate_hourly(stats, |s| (s.total_vsize.saturating_sub(s.financial_vsize), s.total_vsize)),
         ),
         _ => (
-            chart_aggregate_daily(stats, |s| (chart_est_bip110_vsize(s), s.total_vsize)),
-            chart_aggregate_hourly(stats, |s| (chart_est_bip110_vsize(s), s.total_vsize)),
+            chart_aggregate_daily(stats, |s| (s.bip110_violating_vsize, s.total_vsize)),
+            chart_aggregate_hourly(stats, |s| (s.bip110_violating_vsize, s.total_vsize)),
         ),
     };
 
@@ -2269,7 +2255,7 @@ fn draw_charts(f: &mut Frame, area: Rect, analytics: &AnalyticsData, chart_mode:
     let num_days = daily_primary.len();
     let (primary_label, primary_color): (&str, Color) = match chart_mode {
         0 | 1 => ("weight%", Color::Yellow),
-        _ => ("est. weight%", Color::Red),
+        _ => ("weight%", Color::Red),
     };
 
     let top_title = match chart_mode {

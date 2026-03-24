@@ -385,8 +385,9 @@ async fn main() -> anyhow::Result<()> {
                         // During IBD this is skipped; triggers once IBD completes.
                         backfill_started = true;
                         let mut loaded = load_stats_from_file();
-                        let had_incomplete = loaded.iter().any(|s| s.total_vsize == 0 || !s.bip110_checked || !s.bip110_per_protocol);
-                        loaded.retain(|s| s.total_vsize > 0 && s.bip110_checked && s.bip110_per_protocol);
+                        let needs_vsize = |s: &rpc::BlockStats| s.bip110_violating_txs > 0 && s.bip110_violating_vsize == 0;
+                        let had_incomplete = loaded.iter().any(|s| s.total_vsize == 0 || !s.bip110_checked || !s.bip110_per_protocol || needs_vsize(s));
+                        loaded.retain(|s| s.total_vsize > 0 && s.bip110_checked && s.bip110_per_protocol && !needs_vsize(s));
                         if had_incomplete {
                             rewrite_stats_file(&loaded);
                         }
