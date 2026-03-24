@@ -79,7 +79,9 @@ impl Screen for DashboardScreen {
         draw_blockchain_card(f, top_cols[0], data);
         draw_mempool_card(f, top_cols[1], data);
         draw_network_card(f, top_cols[2], data);
-        draw_system_card(f, top_cols[3], &state.system_stats);
+        let uses_tor = data.peers.iter().any(|p| p.addr.contains(".onion"))
+            || data.network.localaddresses.iter().any(|a| a.address.contains(".onion"));
+        draw_system_card(f, top_cols[3], &state.system_stats, uses_tor);
 
         let bottom_rows = Layout::default()
             .direction(Direction::Vertical)
@@ -368,7 +370,7 @@ fn draw_network_card(f: &mut Frame, area: Rect, data: &NodeData) {
     f.render_widget(Paragraph::new(lines).block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).title(" Network ").title_style(Style::default().fg(Color::Green).bold())), area);
 }
 
-fn draw_system_card(f: &mut Frame, area: Rect, sys: &SystemStats) {
+fn draw_system_card(f: &mut Frame, area: Rect, sys: &SystemStats, uses_tor: bool) {
     let gray = Style::default().fg(Color::DarkGray);
 
     let cpu_total = if !sys.cpus.is_empty() {
@@ -376,7 +378,7 @@ fn draw_system_card(f: &mut Frame, area: Rect, sys: &SystemStats) {
         sum / sys.cpus.len() as f32
     } else { 0.0 };
 
-    let mem_used = sys.mem.used + sys.mem.buffers + sys.mem.cached;
+    let mem_used = sys.mem.used; // excludes buffers/cached (like htop green)
     let mem_pct = if sys.mem.total > 0 { mem_used as f64 / sys.mem.total as f64 * 100.0 } else { 0.0 };
 
     let disk_r: u64 = sys.disks.iter().map(|d| d.read_per_sec).sum();
@@ -405,14 +407,21 @@ fn draw_system_card(f: &mut Frame, area: Rect, sys: &SystemStats) {
 
     if sys.bitcoind.found {
         let bc = &sys.bitcoind;
-        let bc_cpu_color = if bc.cpu_pct > 80.0 { Color::Red } else if bc.cpu_pct > 30.0 { Color::Yellow } else { Color::Green };
-        lines.push(Line::from(Span::styled("bitcoind:", Style::default().fg(Color::Cyan))));
-        lines.push(Line::from(vec![
-            Span::styled("  CPU ", gray),
-            Span::styled(format!("{:.0}%", bc.cpu_pct), Style::default().fg(bc_cpu_color)),
-            Span::styled("  Mem ", gray),
-            Span::styled(format_bytes_short(bc.rss), Style::default().fg(Color::White)),
-        ]));
+        let c = if bc.cpu_pct > 80.0 { Color::Red } else if bc.cpu_pct > 30.0 { Color::Yellow } else { Color::Green };
+        let mut proc_spans = vec![
+            Span::styled("btc ", Style::default().fg(Color::Cyan)),
+            Span::styled(format!("{:.0}%", bc.cpu_pct), Style::default().fg(c)),
+            Span::styled(format!(" {}", format_bytes_short(bc.rss)), Style::default().fg(Color::White)),
+        ];
+        // Show tor stats only if node has onion peers
+        if sys.tor.found && uses_tor {
+            let t = &sys.tor;
+            let tc = if t.cpu_pct > 50.0 { Color::Red } else if t.cpu_pct > 10.0 { Color::Yellow } else { Color::Green };
+            proc_spans.push(Span::styled("  tor ", Style::default().fg(Color::Magenta)));
+            proc_spans.push(Span::styled(format!("{:.0}%", t.cpu_pct), Style::default().fg(tc)));
+            proc_spans.push(Span::styled(format!(" {}", format_bytes_short(t.rss)), Style::default().fg(Color::White)));
+        }
+        lines.push(Line::from(proc_spans));
     }
 
     f.render_widget(Paragraph::new(lines).block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).title(" System ").title_style(Style::default().fg(Color::Yellow).bold())), area);

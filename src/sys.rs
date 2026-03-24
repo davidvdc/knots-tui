@@ -39,6 +39,7 @@ pub struct SystemStats {
     pub mem: MemUsage,
     pub disks: Vec<DiskIO>,
     pub bitcoind: ProcessStats,
+    pub tor: ProcessStats,
 }
 
 struct CpuSample {
@@ -73,18 +74,20 @@ struct ProcSample {
 pub struct SystemSampler {
     prev_cpus: Vec<CpuSample>,
     prev_disks: HashMap<String, DiskSample>,
-    prev_proc: Option<ProcSample>,
+    prev_bitcoind: Option<ProcSample>,
+    prev_tor: Option<ProcSample>,
     prev_time: Instant,
 }
 
 impl SystemSampler {
     pub fn new() -> Self {
-        let pid = find_bitcoind_pid();
-        let prev_proc = pid.and_then(read_proc_cpu);
+        let prev_bitcoind = find_pid_by_name(&["bitcoin", "knots"]).and_then(read_proc_cpu);
+        let prev_tor = find_pid_by_name(&["tor"]).and_then(read_proc_cpu);
         Self {
             prev_cpus: read_cpu_samples(),
             prev_disks: read_disk_samples(),
-            prev_proc,
+            prev_bitcoind,
+            prev_tor,
             prev_time: Instant::now(),
         }
     }
@@ -154,31 +157,17 @@ impl SystemSampler {
             .collect();
         disks.sort_by(|a, b| a.name.cmp(&b.name));
 
-        // Bitcoind process stats
-        let pid = self.prev_proc.as_ref().map(|p| p.pid).or_else(find_bitcoind_pid);
-        let curr_proc = pid.and_then(read_proc_cpu);
-        let bitcoind = match (&self.prev_proc, &curr_proc) {
-            (Some(prev), Some(curr)) if prev.pid == curr.pid => {
-                let clk_tck = 100.0; // sysconf(_SC_CLK_TCK), almost always 100 on Linux
-                let d_utime = curr.utime.saturating_sub(prev.utime) as f64;
-                let d_stime = curr.stime.saturating_sub(prev.stime) as f64;
-                let cpu_pct = ((d_utime + d_stime) / clk_tck / dt * 100.0) as f32;
-                let rss = read_proc_rss(curr.pid);
-                ProcessStats { found: true, cpu_pct, rss }
-            }
-            (None, Some(curr)) => {
-                let rss = read_proc_rss(curr.pid);
-                ProcessStats { found: true, cpu_pct: 0.0, rss }
-            }
-            _ => ProcessStats::default(),
-        };
-        self.prev_proc = curr_proc;
+        let bitcoind = sample_process(&self.prev_bitcoind, &["bitcoin", "knots"], dt);
+        self.prev_bitcoind = find_pid_by_name(&["bitcoin", "knots"]).and_then(read_proc_cpu);
+
+        let tor = sample_process(&self.prev_tor, &["tor"], dt);
+        self.prev_tor = find_pid_by_name(&["tor"]).and_then(read_proc_cpu);
 
         self.prev_cpus = curr_cpus;
         self.prev_disks = curr_disks;
         self.prev_time = now;
 
-        SystemStats { cpus, mem, disks, bitcoind }
+        SystemStats { cpus, mem, disks, bitcoind, tor }
     }
 }
 
@@ -275,8 +264,27 @@ fn read_disk_samples() -> HashMap<String, DiskSample> {
     samples
 }
 
-/// Find the PID of a running bitcoind/bitcoin-qt/knots process by scanning /proc
-fn find_bitcoind_pid() -> Option<u32> {
+/// Sample a tracked process: compute CPU% from previous ticks, read current RSS
+fn sample_process(prev: &Option<ProcSample>, names: &[&str], dt: f64) -> ProcessStats {
+    let pid = prev.as_ref().map(|p| p.pid).or_else(|| find_pid_by_name(names));
+    let curr = pid.and_then(read_proc_cpu);
+    match (prev, &curr) {
+        (Some(prev), Some(curr)) if prev.pid == curr.pid => {
+            let clk_tck = 100.0;
+            let d_utime = curr.utime.saturating_sub(prev.utime) as f64;
+            let d_stime = curr.stime.saturating_sub(prev.stime) as f64;
+            let cpu_pct = ((d_utime + d_stime) / clk_tck / dt * 100.0) as f32;
+            ProcessStats { found: true, cpu_pct, rss: read_proc_rss(curr.pid) }
+        }
+        (None, Some(curr)) => {
+            ProcessStats { found: true, cpu_pct: 0.0, rss: read_proc_rss(curr.pid) }
+        }
+        _ => ProcessStats::default(),
+    }
+}
+
+/// Find a PID by matching process comm or cmdline against a list of name prefixes
+fn find_pid_by_name(names: &[&str]) -> Option<u32> {
     let proc_dir = match std::fs::read_dir("/proc") {
         Ok(d) => d,
         Err(_) => return None,
@@ -289,19 +297,17 @@ fn find_bitcoind_pid() -> Option<u32> {
                 Ok(p) => p,
                 Err(_) => continue,
             };
-            // Check comm first (fast)
             let comm_path = entry.path().join("comm");
             if let Ok(comm) = std::fs::read_to_string(&comm_path) {
                 let comm = comm.trim().to_lowercase();
-                if comm.starts_with("bitcoin") || comm.contains("knots") {
+                if names.iter().any(|n| comm.starts_with(n)) {
                     return Some(pid);
                 }
             }
-            // Fallback: check cmdline for bitcoind/bitcoin-qt
             let cmdline_path = entry.path().join("cmdline");
             if let Ok(cmdline) = std::fs::read_to_string(&cmdline_path) {
                 let cmdline = cmdline.to_lowercase();
-                if cmdline.contains("bitcoind") || cmdline.contains("bitcoin-qt") {
+                if names.iter().any(|n| cmdline.contains(n)) {
                     return Some(pid);
                 }
             }
