@@ -91,8 +91,7 @@ fn service_bit_name(bit: u8) -> &'static str {
         0 => "NODE_NETWORK", 1 => "NODE_GETUTXO", 2 => "NODE_BLOOM",
         3 => "NODE_WITNESS", 4 => "NODE_XTHIN", 5 => "NODE_BITCOIN_CASH",
         6 => "NODE_COMPACT_FILTERS", 10 => "NODE_NETWORK_LIMITED",
-        24 => "NODE_P2P_V2", 27 => "NODE_REDUCED_DATA",
-        _ if bit >= 24 => "experimental",
+        11 => "NODE_P2P_V2", 24 => "NODE_P2P_V2", 27 => "NODE_REDUCED_DATA",
         _ => "",
     }
 }
@@ -107,9 +106,10 @@ fn service_bit_desc(bit: u8) -> &'static str {
         5 => "Bitcoin Cash fork identifier (stale)",
         6 => "Serves BIP157 compact block filters",
         10 => "Pruned node, serves last 288 blocks only",
+        11 => "BIP324 v2 transport (old bit, now bit 24)",
         24 => "Encrypted P2P via v2 transport (BIP324)",
         27 => "Enforces BIP-110 ReducedData rules",
-        _ if bit >= 24 => "Reserved for temporary experiments (bits 24-31)",
+        _ if bit >= 24 => "Reserved for experiments (bits 24-31)",
         _ => "",
     }
 }
@@ -139,8 +139,8 @@ fn draw_known_peers_services(f: &mut Frame, area: Rect, data: &NodeData, scroll:
     let rows: Vec<Row> = bit_totals.iter().map(|&(i, bit_total)| {
         let bit = active_bits[i]; let is_local = local_services & (1u64 << bit) != 0;
         let known_name = service_bit_name(bit);
-        let name = if is_local { if known_name.is_empty() { format!("* bit{}", bit) } else { format!("* {}", known_name) } }
-            else if known_name.is_empty() { format!("  bit{}", bit) } else { format!("  {}", known_name) };
+        let marker = if is_local { "*" } else { " " };
+        let name = format!("{} {:>2} {}", marker, bit, known_name);
         let mut cells = vec![name];
         for net in &networks { let (net_total, bit_counts) = &by_network[net]; cells.push(format_count_pct(bit_counts[i], *net_total)); }
         cells.push(format_count_pct(bit_total, grand_total)); cells.push(service_bit_desc(bit).to_string());
