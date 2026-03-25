@@ -271,6 +271,7 @@ fn draw_block_modal(f: &mut Frame, area: Rect, block: &BlockInfo, stats: &BlockS
         Span::styled(format!("{:>7}", "%"), hdr),
         Span::styled(format!("{:>7}", "Weight"), hdr),
         Span::styled(format!("{:>7}", "Wt%"), hdr),
+        Span::styled(format!("{:>6}", "!110%"), rhdr),
         Span::styled(" | ", sep),
         Span::styled(format!("{:>5}", "R1"), rhdr),
         Span::styled(format!("{:>5}", "R2"), rhdr),
@@ -285,8 +286,11 @@ fn draw_block_modal(f: &mut Frame, area: Rect, block: &BlockInfo, stats: &BlockS
     for (label, count, vsize, _violations, mi) in &protocols {
         let is_fin = *label == "Financial";
         if !is_fin && *count == 0 {
-            // Show non-financial rows even at zero count, but dimmed
-            table_rows.push(Line::from(vec![Span::styled(format!("  {:<12}", label), Style::default().fg(Color::DarkGray))]));
+            table_rows.push(Line::from(vec![
+                Span::styled(format!("  {:<12}", label), Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("{:>6}{:>7}{:>7}{:>7}{:>6}", "", "", "", "", ""), Style::default().fg(Color::DarkGray)),
+                Span::styled(" | ", sep),
+            ]));
             continue;
         }
         if is_fin && *count == 0 { continue; }
@@ -298,8 +302,15 @@ fn draw_block_modal(f: &mut Frame, area: Rect, block: &BlockInfo, stats: &BlockS
             Span::styled(format!("{:>6.1}%", pct(*count)), Style::default().fg(row_color)),
             Span::styled(format!("{:>7}", format_bytes_short(*vsize)), Style::default().fg(Color::White)),
             Span::styled(format!("{:>6.1}%", wpct(*vsize)), Style::default().fg(row_color)),
-            Span::styled(" | ", sep),
         ];
+        let viol_total: usize = rules.iter().sum();
+        let viol_pct = if *count > 0 { viol_total as f64 / *count as f64 * 100.0 } else { 0.0 };
+        if viol_total > 0 {
+            spans.push(Span::styled(format!("{:>5.1}%", viol_pct), Style::default().fg(Color::Red)));
+        } else {
+            spans.push(Span::styled(format!("{:>6}", ""), Style::default().fg(Color::DarkGray)));
+        }
+        spans.push(Span::styled(" | ", sep));
         for &rv in rules {
             let s = if rv > 0 { format!("{}", rv) } else { String::new() };
             let c = if rv > 0 { Color::Red } else { Color::DarkGray };
