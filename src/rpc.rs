@@ -24,6 +24,7 @@ pub enum TxCategory {
 pub struct TxClassification {
     pub category: TxCategory,
     pub vsize: u64,
+    pub size: u64, // raw serialized bytes
     pub has_taproot_spend: bool,
     pub has_taproot_output: bool,
     pub oversized_opreturn_count: usize,
@@ -137,11 +138,12 @@ pub fn classify_tx(tx: &Value) -> TxClassification {
         .map(|v| v.iter().any(|i| !i["coinbase"].is_null()))
         .unwrap_or(false);
     let vsize = tx["vsize"].as_u64().unwrap_or(0);
+    let size = tx["size"].as_u64().unwrap_or(0);
 
     if is_coinbase {
         return TxClassification {
             category: TxCategory::Coinbase,
-            vsize,
+            vsize, size,
             has_taproot_spend: false,
             has_taproot_output: false,
             oversized_opreturn_count: 0,
@@ -337,7 +339,7 @@ pub fn classify_tx(tx: &Value) -> TxClassification {
 
     TxClassification {
         category,
-        vsize,
+        vsize, size,
         has_taproot_spend,
         has_taproot_output,
         oversized_opreturn_count,
@@ -392,6 +394,7 @@ pub fn classify_block(txs: &[Value], total_out: u64, total_fee: u64, height: u64
     let mut bip110_rule_matrix = [[0usize; 7]; 10];
     let mut bip110_violating_txs = 0usize;
     let mut bip110_violating_vsize = 0u64;
+    let mut bip110_violating_size = 0u64;
     let mut financial_bip110v = 0usize;
     let mut rune_bip110v = 0usize;
     let mut brc20_bip110v = 0usize;
@@ -435,6 +438,7 @@ pub fn classify_block(txs: &[Value], total_out: u64, total_fee: u64, height: u64
         if has_any_violation {
             bip110_violating_txs += 1;
             bip110_violating_vsize += c.vsize;
+            bip110_violating_size += c.size;
             match c.category {
                 TxCategory::Financial => financial_bip110v += 1,
                 TxCategory::Rune => rune_bip110v += 1,
@@ -521,6 +525,7 @@ pub fn classify_block(txs: &[Value], total_out: u64, total_fee: u64, height: u64
         bip110_op_if,
         bip110_violating_txs,
         bip110_violating_vsize,
+        bip110_violating_size,
         bip110_per_protocol: true,
         financial_bip110v,
         rune_bip110v,
@@ -835,6 +840,7 @@ pub struct BlockStats {
     #[serde(default)] pub bip110_op_if: usize,               // R7: OP_IF/OP_NOTIF in tapscript
     #[serde(default)] pub bip110_violating_txs: usize,       // txs with any BIP-110 violation
     #[serde(default)] pub bip110_violating_vsize: u64,       // total vsize of violating txs
+    #[serde(default)] pub bip110_violating_size: u64,        // total raw bytes of violating txs
     // Per-protocol BIP-110 violation counts:
     #[serde(default)] pub bip110_per_protocol: bool,
     /// Per-protocol per-rule violation counts: [proto_idx][rule_idx]

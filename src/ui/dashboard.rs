@@ -369,26 +369,6 @@ fn draw_block_modal(f: &mut Frame, area: Rect, block: &BlockInfo, stats: &BlockS
     let gray = Style::default().fg(Color::DarkGray);
     text.push(Line::from(""));
 
-    // Protocol descriptions — one per line
-    text.extend_from_slice(&[
-        Line::from(vec![Span::styled("  Runes         ", Style::default().fg(Color::Yellow)), Span::styled("Fungible tokens via OP_RETURN (OP_13 tag)", gray)]),
-        Line::from(vec![Span::styled("  Inscriptions  ", Style::default().fg(Color::Yellow)), Span::styled("Ordinals data embedded in witness (images, text, etc.)", gray)]),
-        Line::from(vec![Span::styled("  BRC-20        ", Style::default().fg(Color::Yellow)), Span::styled("Token standard via ordinals inscription envelopes", gray)]),
-        Line::from(vec![Span::styled("  OPNET         ", Style::default().fg(Color::Yellow)), Span::styled("Smart contracts via tapscript execution", gray)]),
-        Line::from(vec![Span::styled("  Stamps        ", Style::default().fg(Color::Yellow)), Span::styled("SRC-20 tokens encoded in bare multisig outputs", gray)]),
-        Line::from(vec![Span::styled("  Counterparty  ", Style::default().fg(Color::Yellow)), Span::styled("XCP asset protocol via OP_RETURN (CNTRPRTY)", gray)]),
-        Line::from(vec![Span::styled("  Omni          ", Style::default().fg(Color::Yellow)), Span::styled("Token layer via OP_RETURN (ex-Mastercoin)", gray)]),
-        Line::from(""),
-        Line::from(vec![Span::styled("  R1 ", Style::default().fg(Color::Red)), Span::styled("OP_RETURN >83 bytes or scriptPubKey >34 bytes", gray)]),
-        Line::from(vec![Span::styled("  R2 ", Style::default().fg(Color::Red)), Span::styled("Witness element >256 bytes", gray)]),
-        Line::from(vec![Span::styled("  R3 ", Style::default().fg(Color::Red)), Span::styled("Spending undefined witness or tapleaf version", gray)]),
-        Line::from(vec![Span::styled("  R4 ", Style::default().fg(Color::Red)), Span::styled("Witness stack contains taproot annex", gray)]),
-        Line::from(vec![Span::styled("  R5 ", Style::default().fg(Color::Red)), Span::styled("Taproot control block >257 bytes", gray)]),
-        Line::from(vec![Span::styled("  R6 ", Style::default().fg(Color::Red)), Span::styled("Tapscript contains OP_SUCCESS opcode", gray)]),
-        Line::from(vec![Span::styled("  R7 ", Style::default().fg(Color::Red)), Span::styled("Tapscript executes OP_IF or OP_NOTIF", gray)]),
-        Line::from(""),
-    ]);
-
     // BIP-110 summary
     let compl_txs = user_tx.saturating_sub(stats.bip110_violating_txs);
     let compl_pct = if user_tx > 0 { compl_txs as f64 / user_tx as f64 * 100.0 } else { 100.0 };
@@ -396,7 +376,7 @@ fn draw_block_modal(f: &mut Frame, area: Rect, block: &BlockInfo, stats: &BlockS
     text.push(Line::from(vec![
         Span::styled("BIP-110: ", Style::default().fg(Color::Cyan).bold()),
         Span::styled(format!("{:.1}% compliant", compl_pct), Style::default().fg(if stats.bip110_violating_txs == 0 { Color::Green } else { Color::Yellow }).bold()),
-        Span::styled(format!("  ({} violating, {:.1}% weight savings)", stats.bip110_violating_txs, savings_pct), gray),
+        Span::styled(format!("  ({} violating, {} savings on disk)", stats.bip110_violating_txs, format_bytes(stats.bip110_violating_size)), gray),
     ]));
 
     // Max observed sizes — one per line with full descriptions
@@ -422,8 +402,27 @@ fn draw_block_modal(f: &mut Frame, area: Rect, block: &BlockInfo, stats: &BlockS
         ]));
     }
 
-    text.push(Line::from(""));
-    text.push(Line::from(Span::styled("↑/↓: prev/next block | Esc: close", gray)));
+    // Protocol and rule descriptions at bottom
+    text.extend_from_slice(&[
+        Line::from(""),
+        Line::from(vec![Span::styled("  R1 ", Style::default().fg(Color::Red)), Span::styled("OP_RETURN >83 bytes or scriptPubKey >34 bytes", gray)]),
+        Line::from(vec![Span::styled("  R2 ", Style::default().fg(Color::Red)), Span::styled("Witness element >256 bytes", gray)]),
+        Line::from(vec![Span::styled("  R3 ", Style::default().fg(Color::Red)), Span::styled("Spending undefined witness or tapleaf version", gray)]),
+        Line::from(vec![Span::styled("  R4 ", Style::default().fg(Color::Red)), Span::styled("Witness stack contains taproot annex", gray)]),
+        Line::from(vec![Span::styled("  R5 ", Style::default().fg(Color::Red)), Span::styled("Taproot control block >257 bytes", gray)]),
+        Line::from(vec![Span::styled("  R6 ", Style::default().fg(Color::Red)), Span::styled("Tapscript contains OP_SUCCESS opcode", gray)]),
+        Line::from(vec![Span::styled("  R7 ", Style::default().fg(Color::Red)), Span::styled("Tapscript executes OP_IF or OP_NOTIF", gray)]),
+        Line::from(""),
+        Line::from(vec![Span::styled("  Runes         ", Style::default().fg(Color::Yellow)), Span::styled("Fungible tokens via OP_RETURN (OP_13 tag)", gray)]),
+        Line::from(vec![Span::styled("  Inscriptions  ", Style::default().fg(Color::Yellow)), Span::styled("Ordinals data embedded in witness (images, text, etc.)", gray)]),
+        Line::from(vec![Span::styled("  BRC-20        ", Style::default().fg(Color::Yellow)), Span::styled("Token standard via ordinals inscription envelopes", gray)]),
+        Line::from(vec![Span::styled("  OPNET         ", Style::default().fg(Color::Yellow)), Span::styled("Smart contracts via tapscript execution", gray)]),
+        Line::from(vec![Span::styled("  Stamps        ", Style::default().fg(Color::Yellow)), Span::styled("SRC-20 tokens encoded in bare multisig outputs", gray)]),
+        Line::from(vec![Span::styled("  Counterparty  ", Style::default().fg(Color::Yellow)), Span::styled("XCP asset protocol via OP_RETURN (CNTRPRTY)", gray)]),
+        Line::from(vec![Span::styled("  Omni          ", Style::default().fg(Color::Yellow)), Span::styled("Token layer via OP_RETURN (ex-Mastercoin)", gray)]),
+        Line::from(""),
+        Line::from(Span::styled("↑/↓: prev/next block | Esc: close", gray)),
+    ]);
 
     let title = format!(" Block {} ", format_number(block.height));
     let modal_block = Block::default().borders(Borders::ALL).border_type(BorderType::Double)
