@@ -6,7 +6,7 @@ use ratatui::{prelude::*, widgets::*};
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
-use super::common::{format_compact, format_number, pct_str};
+use super::common::{format_bytes_short, format_compact, format_number, pct_str};
 use super::{KeyResult, Screen, StateRef};
 
 pub struct AnalyticsScreen {
@@ -149,6 +149,7 @@ pub struct DayAgg {
     pub opreturn_other: u64,
     pub oversized_opreturn: u64,
     pub bip110_violating_txs: u64,
+    pub bip110_violating_size: u64,
     pub total_vsize: u64,
     pub financial_vsize: u64,
     pub rune_vsize: u64,
@@ -166,7 +167,7 @@ impl DayAgg {
         DayAgg {
             blocks: 0, txs: 0, financial: 0, runes: 0, brc20: 0, inscriptions: 0,
             opnet: 0, stamps: 0, counterparty: 0, omni: 0, opreturn_other: 0,
-            oversized_opreturn: 0, bip110_violating_txs: 0,
+            oversized_opreturn: 0, bip110_violating_txs: 0, bip110_violating_size: 0,
             total_vsize: 0, financial_vsize: 0, rune_vsize: 0, brc20_vsize: 0,
             inscription_vsize: 0, opnet_vsize: 0, stamp_vsize: 0, counterparty_vsize: 0,
             omni_vsize: 0, opreturn_other_vsize: 0,
@@ -188,6 +189,7 @@ impl DayAgg {
         self.opreturn_other += s.opreturn_other_count as u64;
         self.oversized_opreturn += s.oversized_opreturn_count as u64;
         self.bip110_violating_txs += s.bip110_violating_txs as u64;
+        self.bip110_violating_size += s.bip110_violating_size;
         self.total_vsize += s.total_vsize;
         self.financial_vsize += s.financial_vsize;
         self.rune_vsize += s.rune_vsize;
@@ -201,7 +203,7 @@ impl DayAgg {
     }
 }
 
-pub fn analytics_widths() -> [Constraint; 23] {
+pub fn analytics_widths() -> [Constraint; 24] {
     [
         Constraint::Length(10), Constraint::Length(4), Constraint::Length(7),
         Constraint::Length(5), Constraint::Length(5), Constraint::Length(5), Constraint::Length(5),
@@ -209,7 +211,7 @@ pub fn analytics_widths() -> [Constraint; 23] {
         Constraint::Length(6), Constraint::Length(5), Constraint::Length(6), Constraint::Length(5),
         Constraint::Length(6), Constraint::Length(5), Constraint::Length(6), Constraint::Length(5),
         Constraint::Length(6), Constraint::Length(5), Constraint::Length(6), Constraint::Length(5),
-        Constraint::Length(1), Constraint::Length(6), Constraint::Min(5),
+        Constraint::Length(1), Constraint::Length(6), Constraint::Length(5), Constraint::Min(6),
     ]
 }
 
@@ -231,6 +233,7 @@ pub fn analytics_header_row() -> Row<'static> {
         Cell::from("|").style(Style::default().fg(Color::DarkGray)),
         Cell::from(Line::from("!110").alignment(Alignment::Right)).style(Style::default().fg(Color::Red).bold()),
         Cell::from("%").style(Style::default().fg(Color::Red).bold()),
+        Cell::from("Saved").style(Style::default().fg(Color::Red).bold()),
     ])
 }
 
@@ -261,6 +264,8 @@ pub fn analytics_data_row(label: &str, d: &DayAgg) -> Row<'static> {
     cells.push(Cell::from(Line::from(format!("{}", format_compact(d.bip110_violating_txs))).alignment(Alignment::Right)).style(Style::default().fg(bip110_color)));
     let pct_cell = if d.bip110_violating_txs > 0 { format!("{:.1}%", viol_pct) } else { String::new() };
     cells.push(Cell::from(pct_cell).style(Style::default().fg(bip110_color)));
+    let saved = if d.bip110_violating_size > 0 { format_bytes_short(d.bip110_violating_size) } else { String::new() };
+    cells.push(Cell::from(saved).style(Style::default().fg(bip110_color)));
     Row::new(cells)
 }
 
