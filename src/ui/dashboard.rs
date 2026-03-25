@@ -170,10 +170,20 @@ impl Screen for DashboardScreen {
             }
             return;
         }
-        let state = self.state.borrow();
         match key {
             KeyCode::Esc | KeyCode::Char('q') => { self.show_block_modal = false; }
+            KeyCode::Char('r') => {
+                let mut state = self.state.borrow_mut();
+                if let Some(b) = state.node_data.recent_blocks.get(self.selected_block as usize) {
+                    let height = b.height;
+                    let hash = b.hash.clone();
+                    state.block_stats_cache.remove(&height);
+                    state.analytics.stats.retain(|s| s.height != height);
+                    self.svc.fetch_new_block_stats(vec![(height, hash)]);
+                }
+            }
             KeyCode::Down => {
+                let state = self.state.borrow();
                 let max = state.node_data.recent_blocks.len().saturating_sub(1) as u16;
                 if self.selected_block == max && !self.svc.is_fetching_older_blocks() {
                     if let Some(lowest) = state.node_data.recent_blocks.last().map(|b| b.height) {
@@ -421,7 +431,7 @@ fn draw_block_modal(f: &mut Frame, area: Rect, block: &BlockInfo, stats: &BlockS
         Line::from(vec![Span::styled("  Counterparty  ", Style::default().fg(Color::Yellow)), Span::styled("XCP asset protocol via OP_RETURN (CNTRPRTY)", gray)]),
         Line::from(vec![Span::styled("  Omni          ", Style::default().fg(Color::Yellow)), Span::styled("Token layer via OP_RETURN (ex-Mastercoin)", gray)]),
         Line::from(""),
-        Line::from(Span::styled("↑/↓: prev/next block | Esc: close", gray)),
+        Line::from(Span::styled("↑/↓: prev/next block | r: re-analyse | Esc: close", gray)),
     ]);
 
     let title = format!(" Block {} ", format_number(block.height));
