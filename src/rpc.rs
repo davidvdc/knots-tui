@@ -30,7 +30,9 @@ pub struct TxClassification {
     pub max_opreturn_size: usize,
     // BIP-110 violations (non-exclusive, a single tx can trigger multiple):
     pub bip110_oversized_spk: bool,     // output scriptPubKey > 34 bytes (excl nulldata)
+    pub max_spk_size: usize,            // largest non-nulldata scriptPubKey in bytes
     pub bip110_oversized_pushdata: bool, // witness element > 256 bytes (512 hex chars)
+    pub max_witness_item_size: usize,    // largest witness element in bytes
     pub bip110_op_success: bool,         // OP_SUCCESS in tapscript
     pub bip110_op_if: bool,              // OP_IF/OP_NOTIF in tapscript
 }
@@ -142,7 +144,9 @@ pub fn classify_tx(tx: &Value) -> TxClassification {
             oversized_opreturn_count: 0,
             max_opreturn_size: 0,
             bip110_oversized_spk: false,
+            max_spk_size: 0,
             bip110_oversized_pushdata: false,
+            max_witness_item_size: 0,
             bip110_op_success: false,
             bip110_op_if: false,
         };
@@ -158,13 +162,16 @@ pub fn classify_tx(tx: &Value) -> TxClassification {
     let mut oversized_opreturn_count = 0usize;
     let mut max_opreturn_size = 0usize;
     let mut bip110_oversized_spk = false;
+    let mut max_spk_size = 0usize;
     if let Some(outs) = tx["vout"].as_array() {
         for o in outs {
             let script_type = o["scriptPubKey"]["type"].as_str().unwrap_or("");
             // BIP-110: non-nulldata scriptPubKeys > 34 bytes are invalid
             if script_type != "nulldata" {
                 let spk_hex = o["scriptPubKey"]["hex"].as_str().unwrap_or("");
-                if spk_hex.len() / 2 > 34 {
+                let spk_size = spk_hex.len() / 2;
+                if spk_size > max_spk_size { max_spk_size = spk_size; }
+                if spk_size > 34 {
                     bip110_oversized_spk = true;
                 }
             }
@@ -203,6 +210,7 @@ pub fn classify_tx(tx: &Value) -> TxClassification {
     let mut has_opnet = false;
     let mut has_taproot_spend = false;
     let mut bip110_oversized_pushdata = false;
+    let mut max_witness_item_size = 0usize;
     let mut bip110_op_success = false;
     let mut bip110_op_if = false;
     if let Some(ins) = tx["vin"].as_array() {
@@ -224,6 +232,8 @@ pub fn classify_tx(tx: &Value) -> TxClassification {
                 // BIP-110: check witness elements for oversized pushdata (>256 bytes = 512 hex)
                 for item in witness {
                     if let Some(hex) = item.as_str() {
+                        let item_size = hex.len() / 2;
+                        if item_size > max_witness_item_size { max_witness_item_size = item_size; }
                         if hex.len() > 512 {
                             bip110_oversized_pushdata = true;
                         }
@@ -291,7 +301,9 @@ pub fn classify_tx(tx: &Value) -> TxClassification {
         oversized_opreturn_count,
         max_opreturn_size,
         bip110_oversized_spk,
+        max_spk_size,
         bip110_oversized_pushdata,
+        max_witness_item_size,
         bip110_op_success,
         bip110_op_if,
     }
@@ -321,6 +333,8 @@ pub fn classify_block(txs: &[Value], total_out: u64, total_fee: u64, height: u64
     let mut opreturn_other_vsize = 0u64;
     let mut oversized_opreturn_count = 0usize;
     let mut max_opreturn_size = 0usize;
+    let mut max_spk_size = 0usize;
+    let mut max_witness_item_size = 0usize;
     let mut taproot_spend_count = 0usize;
     let mut taproot_output_count = 0usize;
     let mut bip110_oversized_spk = 0usize;
@@ -345,9 +359,9 @@ pub fn classify_block(txs: &[Value], total_out: u64, total_fee: u64, height: u64
         if c.oversized_opreturn_count > 0 {
             oversized_opreturn_count += c.oversized_opreturn_count;
         }
-        if c.max_opreturn_size > max_opreturn_size {
-            max_opreturn_size = c.max_opreturn_size;
-        }
+        if c.max_opreturn_size > max_opreturn_size { max_opreturn_size = c.max_opreturn_size; }
+        if c.max_spk_size > max_spk_size { max_spk_size = c.max_spk_size; }
+        if c.max_witness_item_size > max_witness_item_size { max_witness_item_size = c.max_witness_item_size; }
 
         match c.category {
             TxCategory::Coinbase => continue,
@@ -425,6 +439,8 @@ pub fn classify_block(txs: &[Value], total_out: u64, total_fee: u64, height: u64
         other_data_vsize: 0,
         oversized_opreturn_count,
         max_opreturn_size,
+        max_spk_size,
+        max_witness_item_size,
         taproot_spend_count,
         taproot_output_count,
         bip110_checked: true,
@@ -732,6 +748,8 @@ pub struct BlockStats {
     // Non-exclusive metrics:
     pub oversized_opreturn_count: usize, // OP_RETURNs exceeding 83-byte limit
     pub max_opreturn_size: usize,  // largest OP_RETURN scriptPubKey in bytes
+    #[serde(default)] pub max_spk_size: usize,       // largest non-nulldata scriptPubKey in bytes
+    #[serde(default)] pub max_witness_item_size: usize, // largest witness element in bytes
     pub taproot_spend_count: usize,  // txs spending from taproot inputs
     pub taproot_output_count: usize, // txs creating taproot outputs
     // BIP-110 violation counts (txs violating each rule):
