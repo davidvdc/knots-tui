@@ -91,7 +91,8 @@ fn service_bit_name(bit: u8) -> &'static str {
         0 => "NODE_NETWORK", 1 => "NODE_GETUTXO", 2 => "NODE_BLOOM",
         3 => "NODE_WITNESS", 4 => "NODE_XTHIN", 5 => "NODE_BITCOIN_CASH",
         6 => "NODE_COMPACT_FILTERS", 10 => "NODE_NETWORK_LIMITED",
-        11 => "NODE_P2P_V2", 24 => "NODE_P2P_V2", 27 => "NODE_REDUCED_DATA",
+        11 => "NODE_P2P_V2", 24 => "NODE_P2P_V2",
+        26 => "NODE_FULL_RBF", 27 => "NODE_REDUCED_DATA", 29 => "MALICIOUS",
         _ => "",
     }
 }
@@ -108,7 +109,9 @@ fn service_bit_desc(bit: u8) -> &'static str {
         10 => "Pruned node, serves last 288 blocks only",
         11 => "BIP324 v2 transport (old bit, now bit 24)",
         24 => "Encrypted P2P via v2 transport (BIP324)",
+        26 => "Full replace-by-fee (mempoolfullrbf)",
         27 => "Enforces BIP-110 ReducedData rules",
+        29 => "Flagged as openly malicious node",
         _ if bit >= 24 => "Reserved for experiments (bits 24-31)",
         _ => "",
     }
