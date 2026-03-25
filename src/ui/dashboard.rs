@@ -235,8 +235,8 @@ pub fn draw_peers_table(f: &mut Frame, area: Rect, data: &NodeData, scroll: u16,
 // --- Private rendering helpers (unchanged) ---
 
 fn draw_block_modal(f: &mut Frame, area: Rect, block: &BlockInfo, stats: &BlockStats) {
-    let modal_width = (area.width as f32 * 0.65) as u16;
-    let modal_height = 43u16.min(area.height - 4);
+    let modal_width = (area.width as f32 * 0.75) as u16;
+    let modal_height = 48u16.min(area.height - 4);
     let x = (area.width.saturating_sub(modal_width)) / 2;
     let y = (area.height.saturating_sub(modal_height)) / 2;
     let modal_area = Rect::new(x, y, modal_width, modal_height);
@@ -264,20 +264,21 @@ fn draw_block_modal(f: &mut Frame, area: Rect, block: &BlockInfo, stats: &BlockS
 
     let hdr = Style::default().fg(Color::Cyan).bold();
     let rhdr = Style::default().fg(Color::Red).bold();
-    let rw = 4usize; // rule column width
+    let sep = Style::default().fg(Color::DarkGray);
     let table_header = Line::from(vec![
-        Span::styled(format!("{:<12}", ""), hdr),
-        Span::styled(format!("{:>5}", "Cnt"), hdr),
-        Span::styled(format!("{:>6}", "%"), hdr),
-        Span::styled(format!("{:>6}", "Wt"), hdr),
-        Span::styled(format!("{:>6}", "Wt%"), hdr),
-        Span::styled(format!("{:>rw$}", "R1"), rhdr),
-        Span::styled(format!("{:>rw$}", "R2"), rhdr),
-        Span::styled(format!("{:>rw$}", "R3"), rhdr),
-        Span::styled(format!("{:>rw$}", "R4"), rhdr),
-        Span::styled(format!("{:>rw$}", "R5"), rhdr),
-        Span::styled(format!("{:>rw$}", "R6"), rhdr),
-        Span::styled(format!("{:>rw$}", "R7"), rhdr),
+        Span::styled(format!("{:<14}", ""), hdr),
+        Span::styled(format!("{:>6}", "Count"), hdr),
+        Span::styled(format!("{:>7}", "%"), hdr),
+        Span::styled(format!("{:>7}", "Weight"), hdr),
+        Span::styled(format!("{:>7}", "Wt%"), hdr),
+        Span::styled(" | ", sep),
+        Span::styled(format!("{:>5}", "R1"), rhdr),
+        Span::styled(format!("{:>5}", "R2"), rhdr),
+        Span::styled(format!("{:>5}", "R3"), rhdr),
+        Span::styled(format!("{:>5}", "R4"), rhdr),
+        Span::styled(format!("{:>5}", "R5"), rhdr),
+        Span::styled(format!("{:>5}", "R6"), rhdr),
+        Span::styled(format!("{:>5}", "R7"), rhdr),
     ]);
 
     let mut table_rows: Vec<Line> = Vec::new();
@@ -286,17 +287,22 @@ fn draw_block_modal(f: &mut Frame, area: Rect, block: &BlockInfo, stats: &BlockS
         let is_fin = *label == "Financial";
         let row_color = if is_fin { Color::Green } else { Color::Yellow };
         let rules = &stats.bip110_rule_matrix[*mi];
+        let has_violations = rules.iter().any(|&r| r > 0);
         let mut spans = vec![
-            Span::styled(format!("  {:<10}", label), Style::default().fg(row_color)),
-            Span::styled(format!("{:>5}", count), Style::default().fg(Color::White)),
-            Span::styled(format!("{:>5.1}%", pct(*count)), Style::default().fg(row_color)),
-            Span::styled(format!("{:>6}", format_bytes_short(*vsize).trim_start()), Style::default().fg(Color::White)),
-            Span::styled(format!("{:>5.1}%", wpct(*vsize)), Style::default().fg(row_color)),
+            Span::styled(format!("  {:<12}", label), Style::default().fg(row_color)),
+            Span::styled(format!("{:>6}", count), Style::default().fg(Color::White)),
+            Span::styled(format!("{:>6.1}%", pct(*count)), Style::default().fg(row_color)),
+            Span::styled(format!("{:>7}", format_bytes_short(*vsize)), Style::default().fg(Color::White)),
+            Span::styled(format!("{:>6.1}%", wpct(*vsize)), Style::default().fg(row_color)),
+            Span::styled(" | ", sep),
         ];
         for &rv in rules {
             let s = if rv > 0 { format!("{}", rv) } else { String::new() };
             let c = if rv > 0 { Color::Red } else { Color::DarkGray };
-            spans.push(Span::styled(format!("{:>rw$}", s), Style::default().fg(c)));
+            spans.push(Span::styled(format!("{:>5}", s), Style::default().fg(c)));
+        }
+        if !has_violations {
+            spans.push(Span::styled("  ok", Style::default().fg(Color::Green)));
         }
         table_rows.push(Line::from(spans));
     }
@@ -325,11 +331,18 @@ fn draw_block_modal(f: &mut Frame, area: Rect, block: &BlockInfo, stats: &BlockS
     ];
     text.extend(table_rows);
 
-    // Protocol descriptions
     let gray = Style::default().fg(Color::DarkGray);
+    text.push(Line::from(""));
+
+    // Protocol descriptions — one per line
     text.extend_from_slice(&[
-        Line::from(vec![Span::styled("  Runes=OP_RETURN tokens  Inscriptions=ordinals data  BRC-20=ordinals tokens", gray)]),
-        Line::from(vec![Span::styled("  OPNET=tapscript contracts  Stamps=bare multisig  Counterparty=XCP assets", gray)]),
+        Line::from(vec![Span::styled("  Runes         ", Style::default().fg(Color::Yellow)), Span::styled("Fungible tokens via OP_RETURN (OP_13 tag)", gray)]),
+        Line::from(vec![Span::styled("  Inscriptions  ", Style::default().fg(Color::Yellow)), Span::styled("Ordinals data embedded in witness (images, text, etc.)", gray)]),
+        Line::from(vec![Span::styled("  BRC-20        ", Style::default().fg(Color::Yellow)), Span::styled("Token standard via ordinals inscription envelopes", gray)]),
+        Line::from(vec![Span::styled("  OPNET         ", Style::default().fg(Color::Yellow)), Span::styled("Smart contracts via tapscript execution", gray)]),
+        Line::from(vec![Span::styled("  Stamps        ", Style::default().fg(Color::Yellow)), Span::styled("SRC-20 tokens encoded in bare multisig outputs", gray)]),
+        Line::from(vec![Span::styled("  Counterparty  ", Style::default().fg(Color::Yellow)), Span::styled("XCP asset protocol via OP_RETURN (CNTRPRTY)", gray)]),
+        Line::from(vec![Span::styled("  Omni          ", Style::default().fg(Color::Yellow)), Span::styled("Token layer via OP_RETURN (ex-Mastercoin)", gray)]),
         Line::from(""),
     ]);
 
@@ -342,12 +355,29 @@ fn draw_block_modal(f: &mut Frame, area: Rect, block: &BlockInfo, stats: &BlockS
         Span::styled(format!("{:.1}% compliant", compl_pct), Style::default().fg(if stats.bip110_violating_txs == 0 { Color::Green } else { Color::Yellow }).bold()),
         Span::styled(format!("  ({} violating, {:.1}% weight savings)", stats.bip110_violating_txs, savings_pct), gray),
     ]));
-    // Max sizes for rules with size thresholds
-    let mut maxes: Vec<Span> = vec![Span::styled("  Max: ", gray)];
-    if stats.max_opreturn_size > 0 { maxes.push(Span::styled(format!("R1 OP_RET {}B ", stats.max_opreturn_size), Style::default().fg(if stats.max_opreturn_size > 83 { Color::Red } else { Color::White }))); }
-    if stats.max_spk_size > 0 { maxes.push(Span::styled(format!("R1 SPK {}B ", stats.max_spk_size), Style::default().fg(if stats.max_spk_size > 34 { Color::Red } else { Color::White }))); }
-    if stats.max_witness_item_size > 0 { maxes.push(Span::styled(format!("R2 Wit {}B", stats.max_witness_item_size), Style::default().fg(if stats.max_witness_item_size > 256 { Color::Red } else { Color::White }))); }
-    if maxes.len() > 1 { text.push(Line::from(maxes)); }
+
+    // Max observed sizes — one per line with full descriptions
+    if stats.max_opreturn_size > 0 {
+        text.push(Line::from(vec![
+            Span::styled("  Largest OP_RETURN:       ", gray),
+            Span::styled(format!("{} bytes", stats.max_opreturn_size), Style::default().fg(if stats.max_opreturn_size > 83 { Color::Red } else { Color::Green })),
+            Span::styled(format!("  (limit: 83 bytes)"), gray),
+        ]));
+    }
+    if stats.max_spk_size > 0 {
+        text.push(Line::from(vec![
+            Span::styled("  Largest scriptPubKey:    ", gray),
+            Span::styled(format!("{} bytes", stats.max_spk_size), Style::default().fg(if stats.max_spk_size > 34 { Color::Red } else { Color::Green })),
+            Span::styled(format!("  (limit: 34 bytes)"), gray),
+        ]));
+    }
+    if stats.max_witness_item_size > 0 {
+        text.push(Line::from(vec![
+            Span::styled("  Largest witness element: ", gray),
+            Span::styled(format!("{} bytes", stats.max_witness_item_size), Style::default().fg(if stats.max_witness_item_size > 256 { Color::Red } else { Color::Green })),
+            Span::styled(format!("  (limit: 256 bytes)"), gray),
+        ]));
+    }
 
     text.push(Line::from(""));
     text.push(Line::from(Span::styled("↑/↓: prev/next block | Esc: close", gray)));
