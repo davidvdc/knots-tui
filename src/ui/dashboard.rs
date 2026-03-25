@@ -283,11 +283,15 @@ fn draw_block_modal(f: &mut Frame, area: Rect, block: &BlockInfo, stats: &BlockS
 
     let mut table_rows: Vec<Line> = Vec::new();
     for (label, count, vsize, _violations, mi) in &protocols {
-        if *count == 0 { continue; }
         let is_fin = *label == "Financial";
+        if !is_fin && *count == 0 {
+            // Show non-financial rows even at zero count, but dimmed
+            table_rows.push(Line::from(vec![Span::styled(format!("  {:<12}", label), Style::default().fg(Color::DarkGray))]));
+            continue;
+        }
+        if is_fin && *count == 0 { continue; }
         let row_color = if is_fin { Color::Green } else { Color::Yellow };
         let rules = &stats.bip110_rule_matrix[*mi];
-        let has_violations = rules.iter().any(|&r| r > 0);
         let mut spans = vec![
             Span::styled(format!("  {:<12}", label), Style::default().fg(row_color)),
             Span::styled(format!("{:>6}", count), Style::default().fg(Color::White)),
@@ -300,9 +304,6 @@ fn draw_block_modal(f: &mut Frame, area: Rect, block: &BlockInfo, stats: &BlockS
             let s = if rv > 0 { format!("{}", rv) } else { String::new() };
             let c = if rv > 0 { Color::Red } else { Color::DarkGray };
             spans.push(Span::styled(format!("{:>5}", s), Style::default().fg(c)));
-        }
-        if !has_violations {
-            spans.push(Span::styled("  ok", Style::default().fg(Color::Green)));
         }
         table_rows.push(Line::from(spans));
     }
@@ -343,6 +344,14 @@ fn draw_block_modal(f: &mut Frame, area: Rect, block: &BlockInfo, stats: &BlockS
         Line::from(vec![Span::styled("  Stamps        ", Style::default().fg(Color::Yellow)), Span::styled("SRC-20 tokens encoded in bare multisig outputs", gray)]),
         Line::from(vec![Span::styled("  Counterparty  ", Style::default().fg(Color::Yellow)), Span::styled("XCP asset protocol via OP_RETURN (CNTRPRTY)", gray)]),
         Line::from(vec![Span::styled("  Omni          ", Style::default().fg(Color::Yellow)), Span::styled("Token layer via OP_RETURN (ex-Mastercoin)", gray)]),
+        Line::from(""),
+        Line::from(vec![Span::styled("  R1 ", Style::default().fg(Color::Red)), Span::styled("OP_RETURN >83 bytes or scriptPubKey >34 bytes", gray)]),
+        Line::from(vec![Span::styled("  R2 ", Style::default().fg(Color::Red)), Span::styled("Witness element >256 bytes", gray)]),
+        Line::from(vec![Span::styled("  R3 ", Style::default().fg(Color::Red)), Span::styled("Spending undefined witness or tapleaf version", gray)]),
+        Line::from(vec![Span::styled("  R4 ", Style::default().fg(Color::Red)), Span::styled("Witness stack contains taproot annex", gray)]),
+        Line::from(vec![Span::styled("  R5 ", Style::default().fg(Color::Red)), Span::styled("Taproot control block >257 bytes", gray)]),
+        Line::from(vec![Span::styled("  R6 ", Style::default().fg(Color::Red)), Span::styled("Tapscript contains OP_SUCCESS opcode", gray)]),
+        Line::from(vec![Span::styled("  R7 ", Style::default().fg(Color::Red)), Span::styled("Tapscript executes OP_IF or OP_NOTIF", gray)]),
         Line::from(""),
     ]);
 
