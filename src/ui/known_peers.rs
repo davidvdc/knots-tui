@@ -128,7 +128,7 @@ fn draw_known_peers_services(f: &mut Frame, area: Rect, data: &NodeData, scroll:
         for (i, &bit) in active_bits.iter().enumerate() { if addr.services & (1u64 << bit) != 0 { entry.1[i] += 1; } }
     }
     let networks: Vec<String> = by_network.keys().cloned().collect();
-    let mut header_cells = vec!["Service".to_string()];
+    let mut header_cells = vec!["  Bit Service".to_string()];
     for net in &networks { header_cells.push(net.clone()); }
     header_cells.push("TOTAL".to_string()); header_cells.push("Description".to_string());
     let header = Row::new(header_cells).style(Style::default().fg(Color::Cyan).bold()).bottom_margin(0);
