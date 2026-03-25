@@ -29,12 +29,15 @@ pub struct TxClassification {
     pub oversized_opreturn_count: usize,
     pub max_opreturn_size: usize,
     // BIP-110 violations (non-exclusive, a single tx can trigger multiple):
-    pub bip110_oversized_spk: bool,     // output scriptPubKey > 34 bytes (excl nulldata)
-    pub max_spk_size: usize,            // largest non-nulldata scriptPubKey in bytes
-    pub bip110_oversized_pushdata: bool, // witness element > 256 bytes (512 hex chars)
-    pub max_witness_item_size: usize,    // largest witness element in bytes
-    pub bip110_op_success: bool,         // OP_SUCCESS in tapscript
-    pub bip110_op_if: bool,              // OP_IF/OP_NOTIF in tapscript
+    pub bip110_oversized_spk: bool,       // R1: output scriptPubKey > 34 bytes (excl nulldata)
+    pub max_spk_size: usize,              // largest non-nulldata scriptPubKey in bytes
+    pub bip110_oversized_pushdata: bool,  // R2: witness element > 256 bytes
+    pub max_witness_item_size: usize,     // largest witness element in bytes
+    pub bip110_undefined_version: bool,   // R3: spending undefined witness/tapleaf version
+    pub bip110_annex: bool,               // R4: witness stack contains taproot annex
+    pub bip110_oversized_control: bool,   // R5: control block > 257 bytes
+    pub bip110_op_success: bool,          // R6: OP_SUCCESS in tapscript
+    pub bip110_op_if: bool,               // R7: OP_IF/OP_NOTIF in tapscript
 }
 
 /// Check if a tapscript (hex) contains any OP_SUCCESS opcode.
@@ -147,6 +150,9 @@ pub fn classify_tx(tx: &Value) -> TxClassification {
             max_spk_size: 0,
             bip110_oversized_pushdata: false,
             max_witness_item_size: 0,
+            bip110_undefined_version: false,
+            bip110_annex: false,
+            bip110_oversized_control: false,
             bip110_op_success: false,
             bip110_op_if: false,
         };
@@ -163,6 +169,7 @@ pub fn classify_tx(tx: &Value) -> TxClassification {
     let mut max_opreturn_size = 0usize;
     let mut bip110_oversized_spk = false;
     let mut max_spk_size = 0usize;
+    let mut bip110_undefined_version = false;
     if let Some(outs) = tx["vout"].as_array() {
         for o in outs {
             let script_type = o["scriptPubKey"]["type"].as_str().unwrap_or("");
@@ -211,15 +218,25 @@ pub fn classify_tx(tx: &Value) -> TxClassification {
     let mut has_taproot_spend = false;
     let mut bip110_oversized_pushdata = false;
     let mut max_witness_item_size = 0usize;
+    let mut bip110_annex = false;
+    let mut bip110_oversized_control = false;
     let mut bip110_op_success = false;
     let mut bip110_op_if = false;
     if let Some(ins) = tx["vin"].as_array() {
         for input in ins {
-            let is_taproot_input = input["prevout"]["scriptPubKey"]["type"].as_str()
-                == Some("witness_v1_taproot");
+            let prevout_type = input["prevout"]["scriptPubKey"]["type"].as_str().unwrap_or("");
+            let is_taproot_input = prevout_type == "witness_v1_taproot";
             if is_taproot_input {
                 has_taproot_spend = true;
             }
+
+            // R3: spending undefined witness versions (v2-v16)
+            if prevout_type.starts_with("witness_v") && prevout_type != "witness_v0_keyhash"
+                && prevout_type != "witness_v0_scripthash" && prevout_type != "witness_v1_taproot"
+            {
+                bip110_undefined_version = true;
+            }
+
             if let Some(witness) = input["txinwitness"].as_array() {
                 if witness.len() == 5 {
                     let ctrl = witness[4].as_str().unwrap_or("");
@@ -240,16 +257,41 @@ pub fn classify_tx(tx: &Value) -> TxClassification {
                     }
                 }
 
-                // BIP-110: check tapscript for OP_SUCCESS and OP_IF/OP_NOTIF
+                // R4: taproot annex — last witness item starts with 0x50 when spending taproot
+                // with 2+ items and no script-path (key-path: exactly 1 item = signature,
+                // annex present: 2 items where last starts with 0x50)
+                if is_taproot_input && witness.len() >= 2 {
+                    let last = witness[witness.len() - 1].as_str().unwrap_or("");
+                    if last.starts_with("50") {
+                        bip110_annex = true;
+                    }
+                }
+
                 // Taproot script-path spend: witness = [inputs...] [tapscript] [control_block]
-                // Control block starts with 0xc0 or 0xc1 (leaf version | parity)
+                // Control block starts with leaf version byte (even = 0xc0, odd = 0xc1 for v1)
                 if is_taproot_input && witness.len() >= 2 {
                     let ctrl = witness[witness.len() - 1].as_str().unwrap_or("");
-                    if ctrl.starts_with("c0") || ctrl.starts_with("c1") {
+                    let is_script_path = ctrl.len() >= 2 && {
+                        let first_byte = u8::from_str_radix(&ctrl[..2], 16).unwrap_or(0);
+                        first_byte & 0xfe == 0xc0 // leaf version 0 (tapscript v0)
+                    };
+                    if is_script_path {
+                        // R5: control block > 257 bytes (514 hex chars)
+                        if ctrl.len() / 2 > 257 {
+                            bip110_oversized_control = true;
+                        }
+                        // R3: undefined tapleaf versions (leaf version byte != 0xc0/0xc1)
+                        let first_byte = u8::from_str_radix(&ctrl[..2], 16).unwrap_or(0xc0);
+                        if first_byte != 0xc0 && first_byte != 0xc1 {
+                            bip110_undefined_version = true;
+                        }
+
                         let tapscript_hex = witness[witness.len() - 2].as_str().unwrap_or("");
+                        // R6: OP_SUCCESS
                         if has_op_success(tapscript_hex) {
                             bip110_op_success = true;
                         }
+                        // R7: OP_IF/OP_NOTIF
                         if has_op_if_notif(tapscript_hex) {
                             bip110_op_if = true;
                         }
@@ -304,6 +346,9 @@ pub fn classify_tx(tx: &Value) -> TxClassification {
         max_spk_size,
         bip110_oversized_pushdata,
         max_witness_item_size,
+        bip110_undefined_version,
+        bip110_annex,
+        bip110_oversized_control,
         bip110_op_success,
         bip110_op_if,
     }
@@ -339,6 +384,9 @@ pub fn classify_block(txs: &[Value], total_out: u64, total_fee: u64, height: u64
     let mut taproot_output_count = 0usize;
     let mut bip110_oversized_spk = 0usize;
     let mut bip110_oversized_pushdata = 0usize;
+    let mut bip110_undefined_version = 0usize;
+    let mut bip110_annex = 0usize;
+    let mut bip110_oversized_control = 0usize;
     let mut bip110_op_success = 0usize;
     let mut bip110_op_if = 0usize;
     let mut bip110_violating_txs = 0usize;
@@ -381,6 +429,7 @@ pub fn classify_block(txs: &[Value], total_out: u64, total_fee: u64, height: u64
 
         // BIP-110 violations
         let has_any_violation = c.bip110_oversized_spk || c.bip110_oversized_pushdata
+            || c.bip110_undefined_version || c.bip110_annex || c.bip110_oversized_control
             || c.bip110_op_success || c.bip110_op_if || c.oversized_opreturn_count > 0;
         if has_any_violation {
             bip110_violating_txs += 1;
@@ -400,6 +449,9 @@ pub fn classify_block(txs: &[Value], total_out: u64, total_fee: u64, height: u64
         }
         if c.bip110_oversized_spk { bip110_oversized_spk += 1; }
         if c.bip110_oversized_pushdata { bip110_oversized_pushdata += 1; }
+        if c.bip110_undefined_version { bip110_undefined_version += 1; }
+        if c.bip110_annex { bip110_annex += 1; }
+        if c.bip110_oversized_control { bip110_oversized_control += 1; }
         if c.bip110_op_success { bip110_op_success += 1; }
         if c.bip110_op_if { bip110_op_if += 1; }
     }
@@ -446,6 +498,9 @@ pub fn classify_block(txs: &[Value], total_out: u64, total_fee: u64, height: u64
         bip110_checked: true,
         bip110_oversized_spk,
         bip110_oversized_pushdata,
+        bip110_undefined_version,
+        bip110_annex,
+        bip110_oversized_control,
         bip110_op_success,
         bip110_op_if,
         bip110_violating_txs,
@@ -754,10 +809,13 @@ pub struct BlockStats {
     pub taproot_output_count: usize, // txs creating taproot outputs
     // BIP-110 violation counts (txs violating each rule):
     #[serde(default)] pub bip110_checked: bool,               // true if BIP-110 analysis was performed
-    #[serde(default)] pub bip110_oversized_spk: usize,      // scriptPubKey > 34 bytes (excl nulldata)
-    #[serde(default)] pub bip110_oversized_pushdata: usize,  // witness element > 256 bytes
-    #[serde(default)] pub bip110_op_success: usize,          // OP_SUCCESS in tapscript
-    #[serde(default)] pub bip110_op_if: usize,               // OP_IF/OP_NOTIF in tapscript
+    #[serde(default)] pub bip110_oversized_spk: usize,        // R1: scriptPubKey > 34 bytes
+    #[serde(default)] pub bip110_oversized_pushdata: usize,  // R2: witness element > 256 bytes
+    #[serde(default)] pub bip110_undefined_version: usize,   // R3: undefined witness/tapleaf version
+    #[serde(default)] pub bip110_annex: usize,               // R4: taproot annex present
+    #[serde(default)] pub bip110_oversized_control: usize,   // R5: control block > 257 bytes
+    #[serde(default)] pub bip110_op_success: usize,          // R6: OP_SUCCESS in tapscript
+    #[serde(default)] pub bip110_op_if: usize,               // R7: OP_IF/OP_NOTIF in tapscript
     #[serde(default)] pub bip110_violating_txs: usize,       // txs with any BIP-110 violation
     #[serde(default)] pub bip110_violating_vsize: u64,       // total vsize of violating txs
     // Per-protocol BIP-110 violation counts:
