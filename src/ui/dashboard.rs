@@ -235,7 +235,16 @@ pub fn draw_peers_table(f: &mut Frame, area: Rect, data: &NodeData, scroll: u16,
     let table = Table::new(rows, widths).header(header).block(
         Block::default().borders(Borders::ALL).border_type(BorderType::Rounded)
             .border_style(Style::default().fg(border_color))
-            .title(format!(" Peers ({}) | known: {} ", data.peers.len(), format_number(data.known_peers)))
+            .title({
+                let total_known = data.known_addresses.len();
+                let bip110_known = data.known_addresses.iter().filter(|a| a.services & (1u64 << 27) != 0).count();
+                if total_known > 0 && bip110_known > 0 {
+                    let pct = bip110_known as f64 / total_known as f64 * 100.0;
+                    format!(" Peers ({}) | known: {} | BIP110: {:.1}% ", data.peers.len(), format_number(data.known_peers), pct)
+                } else {
+                    format!(" Peers ({}) | known: {} ", data.peers.len(), format_number(data.known_peers))
+                }
+            })
             .title_style(Style::default().fg(Color::Cyan).bold()))
         .row_highlight_style(Style::default().bg(Color::DarkGray));
     let mut tstate = TableState::default().with_offset(scroll as usize);
