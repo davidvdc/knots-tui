@@ -268,9 +268,9 @@ fn draw_block_modal(f: &mut Frame, area: Rect, block: &BlockInfo, stats: &BlockS
     let table_header = Line::from(vec![
         Span::styled(format!("{:<14}", ""), hdr),
         Span::styled(format!("{:>6}", "Count"), hdr),
-        Span::styled(format!("{:>7}", "%"), hdr),
+        Span::styled(format!("{:>6}", "%"), hdr),
         Span::styled(format!("{:>7}", "Weight"), hdr),
-        Span::styled(format!("{:>7}", "Wt%"), hdr),
+        Span::styled(format!("{:>6}", "Wt%"), hdr),
         Span::styled(format!("{:>6}", "!110%"), rhdr),
         Span::styled(" | ", sep),
         Span::styled(format!("{:>5}", "R1"), rhdr),
@@ -299,14 +299,14 @@ fn draw_block_modal(f: &mut Frame, area: Rect, block: &BlockInfo, stats: &BlockS
         let mut spans = vec![
             Span::styled(format!("  {:<12}", label), Style::default().fg(row_color)),
             Span::styled(format!("{:>6}", count), Style::default().fg(Color::White)),
-            Span::styled(format!("{:>6.1}%", pct(*count)), Style::default().fg(row_color)),
+            Span::styled(format!("{:>6}", format_pct(pct(*count))), Style::default().fg(row_color)),
             Span::styled(format!("{:>7}", format_bytes_short(*vsize)), Style::default().fg(Color::White)),
-            Span::styled(format!("{:>6.1}%", wpct(*vsize)), Style::default().fg(row_color)),
+            Span::styled(format!("{:>6}", format_pct(wpct(*vsize))), Style::default().fg(row_color)),
         ];
         let viol_total: usize = rules.iter().sum();
-        let viol_pct = if *count > 0 { viol_total as f64 / *count as f64 * 100.0 } else { 0.0 };
         if viol_total > 0 {
-            spans.push(Span::styled(format!("{:>5.1}%", viol_pct), Style::default().fg(Color::Red)));
+            let viol_pct = if *count > 0 { viol_total as f64 / *count as f64 * 100.0 } else { 0.0 };
+            spans.push(Span::styled(format!("{:>6}", format_pct(viol_pct)), Style::default().fg(Color::Red)));
         } else {
             spans.push(Span::styled(format!("{:>6}", ""), Style::default().fg(Color::DarkGray)));
         }
@@ -318,6 +318,29 @@ fn draw_block_modal(f: &mut Frame, area: Rect, block: &BlockInfo, stats: &BlockS
         }
         table_rows.push(Line::from(spans));
     }
+
+    // Totals row
+    let rule_totals: Vec<usize> = (0..7).map(|r| stats.bip110_rule_matrix.iter().map(|p| p[r]).sum()).collect();
+    let mut totals_spans = vec![
+        Span::styled(format!("  {:<12}", "Total"), Style::default().fg(Color::White).bold()),
+        Span::styled(format!("{:>6}", user_tx), Style::default().fg(Color::White).bold()),
+        Span::styled(format!("{:>6}", ""), Style::default().fg(Color::DarkGray)),
+        Span::styled(format!("{:>7}", format_bytes_short(stats.total_vsize)), Style::default().fg(Color::White).bold()),
+        Span::styled(format!("{:>6}", ""), Style::default().fg(Color::DarkGray)),
+    ];
+    if stats.bip110_violating_txs > 0 {
+        let total_viol_pct = if user_tx > 0 { stats.bip110_violating_txs as f64 / user_tx as f64 * 100.0 } else { 0.0 };
+        totals_spans.push(Span::styled(format!("{:>6}", format_pct(total_viol_pct)), Style::default().fg(Color::Red).bold()));
+    } else {
+        totals_spans.push(Span::styled(format!("{:>6}", ""), Style::default().fg(Color::DarkGray)));
+    }
+    totals_spans.push(Span::styled(" | ", sep));
+    for &rv in &rule_totals {
+        let s = if rv > 0 { format!("{}", rv) } else { String::new() };
+        let c = if rv > 0 { Color::Red } else { Color::DarkGray };
+        totals_spans.push(Span::styled(format!("{:>5}", s), Style::default().fg(c)));
+    }
+    table_rows.push(Line::from(totals_spans));
 
     let taproot_spend_pct = pct(stats.taproot_spend_count);
     let taproot_output_pct = pct(stats.taproot_output_count);

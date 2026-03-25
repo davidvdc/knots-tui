@@ -112,6 +112,12 @@ pub fn pct_str(n: u64, total: u64) -> String {
     if total > 0 { format!("{:.1}", n as f64 / total as f64 * 100.0) } else { "0.0".into() }
 }
 
+/// Fixed-width percentage: always 5 chars (4 digits + %). No decimal at 100+.
+pub fn format_pct(val: f64) -> String {
+    let n = if val >= 100.0 { format!("{:.0}", val) } else { format!("{:.1}", val) };
+    format!("{:>4}%", n)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -269,6 +275,23 @@ mod tests {
     fn bytes_short_always_5_chars() {
         for &v in &[0, 512, 1024, 10240, 102400, 1048576, 10485760, 104857600, 1073741824] {
             assert_eq!(format_bytes_short(v).len(), 5, "failed for {}", v);
+        }
+    }
+
+    // --- format_pct ---
+
+    #[test]
+    fn pct_zero() { assert_eq!(format_pct(0.0), " 0.0%"); }
+    #[test]
+    fn pct_small() { assert_eq!(format_pct(5.3), " 5.3%"); }
+    #[test]
+    fn pct_mid() { assert_eq!(format_pct(12.5), "12.5%"); }
+    #[test]
+    fn pct_full() { assert_eq!(format_pct(100.0), " 100%"); }
+    #[test]
+    fn pct_always_5() {
+        for &v in &[0.0, 0.1, 1.0, 9.9, 10.0, 50.0, 99.9, 100.0] {
+            assert_eq!(format_pct(v).len(), 5, "failed for {}", v);
         }
     }
 
