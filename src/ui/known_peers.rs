@@ -87,11 +87,31 @@ fn format_count_pct(count: u64, total: u64) -> String {
 }
 
 fn service_bit_name(bit: u8) -> &'static str {
-    match bit { 0 => "NODE_NETWORK", 1 => "NODE_GETUTXO", 2 => "NODE_BLOOM", 3 => "NODE_WITNESS", 6 => "NODE_COMPACT_FILTERS", 10 => "NODE_NETWORK_LIMITED", 24 => "NODE_P2P_V2", 27 => "NODE_REDUCED_DATA", _ => "" }
+    match bit {
+        0 => "NODE_NETWORK", 1 => "NODE_GETUTXO", 2 => "NODE_BLOOM",
+        3 => "NODE_WITNESS", 4 => "NODE_XTHIN", 5 => "NODE_BITCOIN_CASH",
+        6 => "NODE_COMPACT_FILTERS", 10 => "NODE_NETWORK_LIMITED",
+        24 => "NODE_P2P_V2", 27 => "NODE_REDUCED_DATA",
+        _ if bit >= 24 => "experimental",
+        _ => "",
+    }
 }
 
 fn service_bit_desc(bit: u8) -> &'static str {
-    match bit { 0 => "Serves all blocks since genesis", 1 => "Serves UTXO queries (BIP64)", 2 => "SPV bloom filter queries (BIP111)", 3 => "Understands SegWit (BIP144)", 6 => "Serves BIP157 compact block filters for light clients", 10 => "Pruned node, serves last 288 blocks only", 24 => "Encrypted P2P via v2 transport (BIP324)", 27 => "Enforces BIP-110 ReducedData rules", _ => "" }
+    match bit {
+        0 => "Serves all blocks since genesis",
+        1 => "Serves UTXO queries (BIP64)",
+        2 => "SPV bloom filter queries (BIP111)",
+        3 => "Understands SegWit (BIP144)",
+        4 => "Xtreme Thinblocks (Bitcoin Unlimited)",
+        5 => "Bitcoin Cash fork identifier (stale)",
+        6 => "Serves BIP157 compact block filters",
+        10 => "Pruned node, serves last 288 blocks only",
+        24 => "Encrypted P2P via v2 transport (BIP324)",
+        27 => "Enforces BIP-110 ReducedData rules",
+        _ if bit >= 24 => "Reserved for temporary experiments (bits 24-31)",
+        _ => "",
+    }
 }
 
 fn draw_known_peers_services(f: &mut Frame, area: Rect, data: &NodeData, scroll: u16) {
