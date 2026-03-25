@@ -389,6 +389,7 @@ pub fn classify_block(txs: &[Value], total_out: u64, total_fee: u64, height: u64
     let mut bip110_oversized_control = 0usize;
     let mut bip110_op_success = 0usize;
     let mut bip110_op_if = 0usize;
+    let mut bip110_rule_matrix = [[0usize; 7]; 10];
     let mut bip110_violating_txs = 0usize;
     let mut bip110_violating_vsize = 0u64;
     let mut financial_bip110v = 0usize;
@@ -454,6 +455,21 @@ pub fn classify_block(txs: &[Value], total_out: u64, total_fee: u64, height: u64
         if c.bip110_oversized_control { bip110_oversized_control += 1; }
         if c.bip110_op_success { bip110_op_success += 1; }
         if c.bip110_op_if { bip110_op_if += 1; }
+
+        // Per-protocol per-rule matrix
+        let pi = match c.category {
+            TxCategory::Financial => 0, TxCategory::Rune => 1, TxCategory::Brc20 => 2,
+            TxCategory::Inscription => 3, TxCategory::Opnet => 4, TxCategory::Stamp => 5,
+            TxCategory::Counterparty => 6, TxCategory::Omni => 7, TxCategory::OpReturnOther => 8,
+            TxCategory::Coinbase => continue,
+        };
+        if c.bip110_oversized_spk || c.oversized_opreturn_count > 0 { bip110_rule_matrix[pi][0] += 1; }
+        if c.bip110_oversized_pushdata { bip110_rule_matrix[pi][1] += 1; }
+        if c.bip110_undefined_version  { bip110_rule_matrix[pi][2] += 1; }
+        if c.bip110_annex              { bip110_rule_matrix[pi][3] += 1; }
+        if c.bip110_oversized_control  { bip110_rule_matrix[pi][4] += 1; }
+        if c.bip110_op_success         { bip110_rule_matrix[pi][5] += 1; }
+        if c.bip110_op_if              { bip110_rule_matrix[pi][6] += 1; }
     }
 
     let user_tx = tx_count.saturating_sub(1);
@@ -515,6 +531,7 @@ pub fn classify_block(txs: &[Value], total_out: u64, total_fee: u64, height: u64
         counterparty_bip110v,
         omni_bip110v,
         opreturn_other_bip110v,
+        bip110_rule_matrix,
     }
 }
 
@@ -820,6 +837,11 @@ pub struct BlockStats {
     #[serde(default)] pub bip110_violating_vsize: u64,       // total vsize of violating txs
     // Per-protocol BIP-110 violation counts:
     #[serde(default)] pub bip110_per_protocol: bool,
+    /// Per-protocol per-rule violation counts: [proto_idx][rule_idx]
+    /// Proto: 0=Financial 1=Rune 2=BRC20 3=Inscription 4=Opnet 5=Stamp 6=Counterparty 7=Omni 8=OPRetOther 9=OtherData
+    /// Rule: 0=R1 1=R2 2=R3 3=R4 4=R5 5=R6 6=R7
+    #[serde(default)]
+    pub bip110_rule_matrix: [[usize; 7]; 10],
     #[serde(default)] pub financial_bip110v: usize,
     #[serde(default)] pub rune_bip110v: usize,
     #[serde(default)] pub brc20_bip110v: usize,

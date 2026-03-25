@@ -244,86 +244,113 @@ fn draw_block_modal(f: &mut Frame, area: Rect, block: &BlockInfo, stats: &BlockS
     f.render_widget(Clear, modal_area); f.render_widget(dim, area);
 
     let user_tx = stats.tx_count.saturating_sub(1);
-    let data_count = user_tx.saturating_sub(stats.financial_count);
-    let data_vsize = stats.total_vsize.saturating_sub(stats.financial_vsize);
     let pct = |count: usize| -> f64 { if user_tx > 0 { (count as f64 / user_tx as f64) * 100.0 } else { 0.0 } };
-    let fin_pct = pct(stats.financial_count); let data_pct = pct(data_count);
-    let taproot_spend_pct = pct(stats.taproot_spend_count); let taproot_output_pct = pct(stats.taproot_output_count);
-    let proto_color = |count: usize| -> Color { if count > 0 { Color::Yellow } else { Color::DarkGray } };
+    let wpct = |vs: u64| -> f64 { if stats.total_vsize > 0 { (vs as f64 / stats.total_vsize as f64) * 100.0 } else { 0.0 } };
     let viol_color = |count: usize| -> Color { if count > 0 { Color::Red } else { Color::Green } };
 
-    let protocols: Vec<(&str, usize, u64, usize, &str)> = vec![
-        ("Runes", stats.rune_count, stats.rune_vsize, stats.rune_bip110v, "fungible tokens via OP_RETURN"),
-        ("BRC-20", stats.brc20_count, stats.brc20_vsize, stats.brc20_bip110v, "token standard via ordinals"),
-        ("Inscriptions", stats.inscription_count, stats.inscription_vsize, stats.inscription_bip110v, "ordinals data (images, text, etc.)"),
-        ("OPNET", stats.opnet_count, stats.opnet_vsize, stats.opnet_bip110v, "smart contracts via tapscript"),
-        ("Stamps", stats.stamp_count, stats.stamp_vsize, stats.stamp_bip110v, "SRC-20 tokens via bare multisig"),
-        ("Counterparty", stats.counterparty_count, stats.counterparty_vsize, stats.counterparty_bip110v, "asset protocol (XCP)"),
-        ("Omni Layer", stats.omni_count, stats.omni_vsize, stats.omni_bip110v, "token layer (ex-Mastercoin)"),
-        ("OP_RETURN other", stats.opreturn_other_count, stats.opreturn_other_vsize, stats.opreturn_other_bip110v, "unclassified nulldata"),
-        ("Other", stats.other_data_count, stats.other_data_vsize, 0, "data tx, unknown protocol"),
+    // Protocol table data: (label, count, vsize, bip110_violations, matrix_idx)
+    let protocols: Vec<(&str, usize, u64, usize, usize)> = vec![
+        ("Financial",    stats.financial_count,      stats.financial_vsize,      stats.financial_bip110v,      0),
+        ("Runes",        stats.rune_count,           stats.rune_vsize,           stats.rune_bip110v,           1),
+        ("Inscriptions", stats.inscription_count,    stats.inscription_vsize,    stats.inscription_bip110v,    3),
+        ("BRC-20",       stats.brc20_count,          stats.brc20_vsize,          stats.brc20_bip110v,          2),
+        ("OPNET",        stats.opnet_count,          stats.opnet_vsize,          stats.opnet_bip110v,          4),
+        ("Stamps",       stats.stamp_count,          stats.stamp_vsize,          stats.stamp_bip110v,          5),
+        ("Counterparty", stats.counterparty_count,   stats.counterparty_vsize,   stats.counterparty_bip110v,   6),
+        ("Omni",         stats.omni_count,           stats.omni_vsize,           stats.omni_bip110v,           7),
+        ("OP_RET other", stats.opreturn_other_count, stats.opreturn_other_vsize, stats.opreturn_other_bip110v, 8),
+        ("Other data",   stats.other_data_count,     stats.other_data_vsize,     0,                            9),
     ];
 
-    let mut text = vec![
-        Line::from(vec![Span::styled("Total output:    ", Style::default().fg(Color::DarkGray)), Span::styled(format_btc(stats.total_out), Style::default().fg(Color::White).bold())]),
-        Line::from(vec![Span::styled("Total fees:      ", Style::default().fg(Color::DarkGray)), Span::styled(format_btc_fees(stats.total_fee), Style::default().fg(Color::White).bold())]),
-        Line::from(vec![Span::styled("Transactions:    ", Style::default().fg(Color::DarkGray)), Span::styled(format!("{}", user_tx), Style::default().fg(Color::White).bold()), Span::styled("  (excl. coinbase)", Style::default().fg(Color::DarkGray))]),
-        Line::from(vec![Span::styled("Total weight:    ", Style::default().fg(Color::DarkGray)), Span::styled(format!("{} WU ({:.1}%)", format_number(block.weight), block.weight as f64 / 4_000_000.0 * 100.0), Style::default().fg(Color::White).bold())]),
-        Line::from(""),
-        Line::from(Span::styled("Transaction Breakdown", Style::default().fg(Color::Cyan).bold())),
-        Line::from(vec![
-            Span::styled("  Financial:       ", Style::default().fg(Color::DarkGray)),
-            Span::styled(format!("{} ({:.1}%)", stats.financial_count, fin_pct), Style::default().fg(Color::Green).bold()),
-            Span::styled(format!("  {:>5}% wt", format!("{:.1}", if stats.total_vsize > 0 { stats.financial_vsize as f64 / stats.total_vsize as f64 * 100.0 } else { 0.0 })), Style::default().fg(Color::Green)),
-            Span::styled(if stats.financial_count > 0 { format!("  110:{:>6}", format!("{}/{}", stats.financial_count.saturating_sub(stats.financial_bip110v), stats.financial_count)) } else { "  110:     -".to_string() }, Style::default().fg(if stats.financial_bip110v == 0 { Color::Green } else { Color::Yellow })),
-        ]),
-        Line::from(vec![
-            Span::styled("  Data/spam:       ", Style::default().fg(Color::DarkGray)),
-            Span::styled(format!("{} ({:.1}%)", data_count, data_pct), Style::default().fg(if data_pct > 10.0 { Color::Red } else { Color::Yellow }).bold()),
-            Span::styled(format!("  {:>5}% wt", format!("{:.1}", if stats.total_vsize > 0 { data_vsize as f64 / stats.total_vsize as f64 * 100.0 } else { 0.0 })), Style::default().fg(if data_pct > 10.0 { Color::Red } else { Color::Yellow })),
-        ]),
-        Line::from(""), Line::from(Span::styled("Protocol Breakdown", Style::default().fg(Color::Cyan).bold())),
-    ];
-    let vsize_pct = |vs: u64| -> f64 { if stats.total_vsize > 0 { (vs as f64 / stats.total_vsize as f64) * 100.0 } else { 0.0 } };
-    for (label, count, vsize, violations, desc) in &protocols {
-        let compliant = count.saturating_sub(*violations);
-        let bip110_str = if *count > 0 { format!("{}/{}", compliant, count) } else { "-".to_string() };
-        let bip110_color = if *count == 0 { Color::DarkGray } else if *violations == 0 { Color::Green } else if compliant == 0 { Color::Red } else { Color::Yellow };
-        text.push(Line::from(vec![
-            Span::styled(format!("  {:17}", format!("{}:", label)), Style::default().fg(Color::DarkGray)),
-            Span::styled(format!("{:>4} ({:.1}%)", count, pct(*count)), Style::default().fg(proto_color(*count))),
-            Span::styled(format!("  {:>5}% wt", format!("{:.1}", vsize_pct(*vsize))), Style::default().fg(proto_color(*count))),
-            Span::styled(format!("  110:{:>6}", bip110_str), Style::default().fg(bip110_color)),
-            Span::styled(format!("  {}", desc), Style::default().fg(Color::DarkGray)),
-        ]));
-    }
-    text.extend_from_slice(&[
-        Line::from(""), Line::from(Span::styled("Taproot Usage", Style::default().fg(Color::Cyan).bold())),
-        Line::from(vec![Span::styled("  Spending from:   ", Style::default().fg(Color::DarkGray)), Span::styled(format!("{} ({:.1}%)", stats.taproot_spend_count, taproot_spend_pct), Style::default().fg(proto_color(stats.taproot_spend_count)))]),
-        Line::from(vec![Span::styled("  Creating to:     ", Style::default().fg(Color::DarkGray)), Span::styled(format!("{} ({:.1}%)", stats.taproot_output_count, taproot_output_pct), Style::default().fg(proto_color(stats.taproot_output_count)))]),
-        Line::from(""), Line::from(Span::styled("BIP-110 Compliance", Style::default().fg(Color::Cyan).bold())),
-        Line::from(vec![Span::styled("  Compliant txs:   ", Style::default().fg(Color::DarkGray)), Span::styled(format!("{} ({:.1}%)", user_tx.saturating_sub(stats.bip110_violating_txs), if user_tx > 0 { (user_tx.saturating_sub(stats.bip110_violating_txs)) as f64 / user_tx as f64 * 100.0 } else { 100.0 }), Style::default().fg(if stats.bip110_violating_txs == 0 { Color::Green } else { Color::Yellow }).bold())]),
-        Line::from(Span::styled("  Violations:", Style::default().fg(Color::DarkGray))),
-        Line::from(vec![Span::styled("    R1 OP_RET >83B:  ", Style::default().fg(Color::DarkGray)), Span::styled(format!("{}", stats.oversized_opreturn_count), Style::default().fg(viol_color(stats.oversized_opreturn_count))), Span::styled("  Largest: ", Style::default().fg(Color::DarkGray)), Span::styled(if stats.max_opreturn_size > 0 { format!("{} bytes", stats.max_opreturn_size) } else { "n/a".to_string() }, Style::default().fg(if stats.max_opreturn_size > 83 { Color::Red } else { Color::White }))]),
-        Line::from(vec![
-            Span::styled("    R1 SPK >34B:     ", Style::default().fg(Color::DarkGray)),
-            Span::styled(format!("{}", stats.bip110_oversized_spk), Style::default().fg(viol_color(stats.bip110_oversized_spk))),
-            Span::styled("  Largest: ", Style::default().fg(Color::DarkGray)),
-            Span::styled(if stats.max_spk_size > 0 { format!("{} bytes", stats.max_spk_size) } else { "n/a".to_string() }, Style::default().fg(if stats.max_spk_size > 34 { Color::Red } else { Color::White })),
-        ]),
-        Line::from(vec![
-            Span::styled("    R2 Witness >256B:", Style::default().fg(Color::DarkGray)),
-            Span::styled(format!(" {}", stats.bip110_oversized_pushdata), Style::default().fg(viol_color(stats.bip110_oversized_pushdata))),
-            Span::styled("  Largest: ", Style::default().fg(Color::DarkGray)),
-            Span::styled(if stats.max_witness_item_size > 0 { format!("{} bytes", stats.max_witness_item_size) } else { "n/a".to_string() }, Style::default().fg(if stats.max_witness_item_size > 256 { Color::Red } else { Color::White })),
-        ]),
-        Line::from(vec![Span::styled("    R3 Undef version:", Style::default().fg(Color::DarkGray)), Span::styled(format!(" {}", stats.bip110_undefined_version), Style::default().fg(viol_color(stats.bip110_undefined_version)))]),
-        Line::from(vec![Span::styled("    R4 Taproot annex:", Style::default().fg(Color::DarkGray)), Span::styled(format!(" {}", stats.bip110_annex), Style::default().fg(viol_color(stats.bip110_annex)))]),
-        Line::from(vec![Span::styled("    R5 Ctrl >257B:   ", Style::default().fg(Color::DarkGray)), Span::styled(format!("{}", stats.bip110_oversized_control), Style::default().fg(viol_color(stats.bip110_oversized_control)))]),
-        Line::from(vec![Span::styled("    R6 OP_SUCCESS:   ", Style::default().fg(Color::DarkGray)), Span::styled(format!("{}", stats.bip110_op_success), Style::default().fg(viol_color(stats.bip110_op_success)))]),
-        Line::from(vec![Span::styled("    R7 OP_IF/NOTIF:  ", Style::default().fg(Color::DarkGray)), Span::styled(format!("{}", stats.bip110_op_if), Style::default().fg(viol_color(stats.bip110_op_if)))]),
-        Line::from(""), Line::from(Span::styled("↑/↓: prev/next block | Esc: close", Style::default().fg(Color::DarkGray))),
+    let hdr = Style::default().fg(Color::Cyan).bold();
+    let rhdr = Style::default().fg(Color::Red).bold();
+    let rw = 4usize; // rule column width
+    let table_header = Line::from(vec![
+        Span::styled(format!("{:<12}", ""), hdr),
+        Span::styled(format!("{:>5}", "Cnt"), hdr),
+        Span::styled(format!("{:>6}", "%"), hdr),
+        Span::styled(format!("{:>6}", "Wt"), hdr),
+        Span::styled(format!("{:>6}", "Wt%"), hdr),
+        Span::styled(format!("{:>rw$}", "R1"), rhdr),
+        Span::styled(format!("{:>rw$}", "R2"), rhdr),
+        Span::styled(format!("{:>rw$}", "R3"), rhdr),
+        Span::styled(format!("{:>rw$}", "R4"), rhdr),
+        Span::styled(format!("{:>rw$}", "R5"), rhdr),
+        Span::styled(format!("{:>rw$}", "R6"), rhdr),
+        Span::styled(format!("{:>rw$}", "R7"), rhdr),
     ]);
+
+    let mut table_rows: Vec<Line> = Vec::new();
+    for (label, count, vsize, _violations, mi) in &protocols {
+        if *count == 0 { continue; }
+        let is_fin = *label == "Financial";
+        let row_color = if is_fin { Color::Green } else { Color::Yellow };
+        let rules = &stats.bip110_rule_matrix[*mi];
+        let mut spans = vec![
+            Span::styled(format!("  {:<10}", label), Style::default().fg(row_color)),
+            Span::styled(format!("{:>5}", count), Style::default().fg(Color::White)),
+            Span::styled(format!("{:>5.1}%", pct(*count)), Style::default().fg(row_color)),
+            Span::styled(format!("{:>6}", format_bytes_short(*vsize).trim_start()), Style::default().fg(Color::White)),
+            Span::styled(format!("{:>5.1}%", wpct(*vsize)), Style::default().fg(row_color)),
+        ];
+        for &rv in rules {
+            let s = if rv > 0 { format!("{}", rv) } else { String::new() };
+            let c = if rv > 0 { Color::Red } else { Color::DarkGray };
+            spans.push(Span::styled(format!("{:>rw$}", s), Style::default().fg(c)));
+        }
+        table_rows.push(Line::from(spans));
+    }
+
+    let taproot_spend_pct = pct(stats.taproot_spend_count);
+    let taproot_output_pct = pct(stats.taproot_output_count);
+
+    let mut text = vec![
+        Line::from(vec![
+            Span::styled("Output: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(format_btc(stats.total_out), Style::default().fg(Color::White).bold()),
+            Span::styled("   Fees: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(format_btc_fees(stats.total_fee), Style::default().fg(Color::White).bold()),
+            Span::styled("   TXs: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(format!("{}", user_tx), Style::default().fg(Color::White).bold()),
+        ]),
+        Line::from(vec![
+            Span::styled("Weight: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(format!("{} WU ({:.1}%)", format_number(block.weight), block.weight as f64 / 4_000_000.0 * 100.0), Style::default().fg(Color::White).bold()),
+            Span::styled("   Taproot: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(format!("spend {} ({:.1}%)", stats.taproot_spend_count, taproot_spend_pct), Style::default().fg(Color::White)),
+            Span::styled(format!("  out {} ({:.1}%)", stats.taproot_output_count, taproot_output_pct), Style::default().fg(Color::White)),
+        ]),
+        Line::from(""),
+        table_header,
+    ];
+    text.extend(table_rows);
+
+    // Protocol descriptions
+    let gray = Style::default().fg(Color::DarkGray);
+    text.extend_from_slice(&[
+        Line::from(vec![Span::styled("  Runes=OP_RETURN tokens  Inscriptions=ordinals data  BRC-20=ordinals tokens", gray)]),
+        Line::from(vec![Span::styled("  OPNET=tapscript contracts  Stamps=bare multisig  Counterparty=XCP assets", gray)]),
+        Line::from(""),
+    ]);
+
+    // BIP-110 summary
+    let compl_txs = user_tx.saturating_sub(stats.bip110_violating_txs);
+    let compl_pct = if user_tx > 0 { compl_txs as f64 / user_tx as f64 * 100.0 } else { 100.0 };
+    let savings_pct = wpct(stats.bip110_violating_vsize);
+    text.push(Line::from(vec![
+        Span::styled("BIP-110: ", Style::default().fg(Color::Cyan).bold()),
+        Span::styled(format!("{:.1}% compliant", compl_pct), Style::default().fg(if stats.bip110_violating_txs == 0 { Color::Green } else { Color::Yellow }).bold()),
+        Span::styled(format!("  ({} violating, {:.1}% weight savings)", stats.bip110_violating_txs, savings_pct), gray),
+    ]));
+    // Max sizes for rules with size thresholds
+    let mut maxes: Vec<Span> = vec![Span::styled("  Max: ", gray)];
+    if stats.max_opreturn_size > 0 { maxes.push(Span::styled(format!("R1 OP_RET {}B ", stats.max_opreturn_size), Style::default().fg(if stats.max_opreturn_size > 83 { Color::Red } else { Color::White }))); }
+    if stats.max_spk_size > 0 { maxes.push(Span::styled(format!("R1 SPK {}B ", stats.max_spk_size), Style::default().fg(if stats.max_spk_size > 34 { Color::Red } else { Color::White }))); }
+    if stats.max_witness_item_size > 0 { maxes.push(Span::styled(format!("R2 Wit {}B", stats.max_witness_item_size), Style::default().fg(if stats.max_witness_item_size > 256 { Color::Red } else { Color::White }))); }
+    if maxes.len() > 1 { text.push(Line::from(maxes)); }
+
+    text.push(Line::from(""));
+    text.push(Line::from(Span::styled("↑/↓: prev/next block | Esc: close", gray)));
 
     let title = format!(" Block {} ", format_number(block.height));
     let modal_block = Block::default().borders(Borders::ALL).border_type(BorderType::Double)
