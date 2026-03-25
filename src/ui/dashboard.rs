@@ -288,7 +288,7 @@ fn draw_block_modal(f: &mut Frame, area: Rect, block: &BlockInfo, stats: &BlockS
         if !is_fin && *count == 0 {
             table_rows.push(Line::from(vec![
                 Span::styled(format!("  {:<12}", label), Style::default().fg(Color::DarkGray)),
-                Span::styled(format!("{:>6}{:>7}{:>7}{:>7}{:>6}", "", "", "", "", ""), Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("{:>6}{:>6}{:>7}{:>6}{:>6}", "", "", "", "", ""), Style::default().fg(Color::DarkGray)),
                 Span::styled(" | ", sep),
             ]));
             continue;
