@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, serde::Serialize)]
 pub struct CpuUsage {
     pub user_pct: f32,
     pub system_pct: f32,
@@ -9,7 +9,7 @@ pub struct CpuUsage {
     pub iowait_pct: f32,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, serde::Serialize)]
 pub struct MemUsage {
     pub total: u64,
     pub used: u64,       // total - available (committed, not easily reclaimable)
@@ -19,21 +19,21 @@ pub struct MemUsage {
     pub swap_used: u64,
 }
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize)]
 pub struct DiskIO {
     pub name: String,
     pub read_per_sec: u64,
     pub write_per_sec: u64,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, serde::Serialize)]
 pub struct ProcessStats {
     pub found: bool,
     pub cpu_pct: f32,
     pub rss: u64, // bytes
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, serde::Serialize)]
 pub struct SystemStats {
     pub cpus: Vec<CpuUsage>,
     pub mem: MemUsage,

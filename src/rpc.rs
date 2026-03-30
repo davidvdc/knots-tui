@@ -547,7 +547,7 @@ pub struct RpcClient {
     client: Client,
 }
 
-#[derive(Default, Clone, Debug)]
+#[derive(Default, Clone, Debug, serde::Serialize)]
 pub struct NodeData {
     pub error: Option<String>,
     pub blockchain: BlockchainInfo,
@@ -568,7 +568,7 @@ pub struct NodeData {
     pub ibd_recv_per_sec: u64,    // download rate (bytes/s), 0 until second fetch
 }
 
-#[derive(Default, Clone, Debug, Deserialize)]
+#[derive(Default, Clone, Debug, serde::Serialize, Deserialize)]
 pub struct KnownAddress {
     #[serde(default)]
     pub time: u64,
@@ -582,7 +582,7 @@ pub struct KnownAddress {
     pub network: String,
 }
 
-#[derive(Default, Clone, Debug, Deserialize)]
+#[derive(Default, Clone, Debug, serde::Serialize, Deserialize)]
 pub struct BlockchainInfo {
     #[serde(default)]
     pub chain: String,
@@ -612,7 +612,7 @@ pub struct BlockchainInfo {
     pub softforks: BTreeMap<String, SoftFork>,
 }
 
-#[derive(Default, Clone, Debug, Deserialize)]
+#[derive(Default, Clone, Debug, serde::Serialize, Deserialize)]
 pub struct SoftFork {
     #[serde(default, rename = "type")]
     pub fork_type: String,
@@ -624,7 +624,7 @@ pub struct SoftFork {
     pub active: bool,
 }
 
-#[derive(Default, Clone, Debug, Deserialize)]
+#[derive(Default, Clone, Debug, serde::Serialize, Deserialize)]
 pub struct Bip9Info {
     #[serde(default)]
     pub status: String,
@@ -640,7 +640,7 @@ pub struct Bip9Info {
     pub statistics: Option<Bip9Statistics>,
 }
 
-#[derive(Default, Clone, Debug, Deserialize)]
+#[derive(Default, Clone, Debug, serde::Serialize, Deserialize)]
 pub struct Bip9Statistics {
     #[serde(default)]
     pub period: u64,
@@ -654,7 +654,7 @@ pub struct Bip9Statistics {
     pub possible: bool,
 }
 
-#[derive(Default, Clone, Debug, Deserialize)]
+#[derive(Default, Clone, Debug, serde::Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum WarningsField {
     #[default]
@@ -673,7 +673,7 @@ impl WarningsField {
     }
 }
 
-#[derive(Default, Clone, Debug, Deserialize)]
+#[derive(Default, Clone, Debug, serde::Serialize, Deserialize)]
 pub struct NetworkInfo {
     #[serde(default)]
     pub version: u64,
@@ -699,7 +699,7 @@ pub struct NetworkInfo {
     pub warnings: WarningsField,
 }
 
-#[derive(Default, Clone, Debug, Deserialize)]
+#[derive(Default, Clone, Debug, serde::Serialize, Deserialize)]
 pub struct LocalAddress {
     #[serde(default)]
     pub address: String,
@@ -707,7 +707,7 @@ pub struct LocalAddress {
     pub port: u16,
 }
 
-#[derive(Default, Clone, Debug, Deserialize)]
+#[derive(Default, Clone, Debug, serde::Serialize, Deserialize)]
 pub struct MempoolInfo {
     #[serde(default)]
     pub loaded: bool,
@@ -727,7 +727,7 @@ pub struct MempoolInfo {
     pub minrelaytxfee: f64,
 }
 
-#[derive(Default, Clone, Debug, Deserialize)]
+#[derive(Default, Clone, Debug, serde::Serialize, Deserialize)]
 pub struct MiningInfo {
     #[serde(default)]
     pub networkhashps: f64,
@@ -737,7 +737,7 @@ pub struct MiningInfo {
     pub chain: String,
 }
 
-#[derive(Default, Clone, Debug, Deserialize)]
+#[derive(Default, Clone, Debug, serde::Serialize, Deserialize)]
 pub struct PeerInfo {
     #[serde(default)]
     pub id: u64,
@@ -773,7 +773,7 @@ pub struct PeerInfo {
     pub relaytxes: bool,
 }
 
-#[derive(Default, Clone, Debug, Deserialize)]
+#[derive(Default, Clone, Debug, serde::Serialize, Deserialize)]
 pub struct NetTotals {
     #[serde(default)]
     pub totalbytesrecv: u64,
@@ -781,7 +781,7 @@ pub struct NetTotals {
     pub totalbytessent: u64,
 }
 
-#[derive(Default, Clone, Debug)]
+#[derive(Default, Clone, Debug, serde::Serialize)]
 pub struct BlockInfo {
     pub height: u64,
     pub hash: String,

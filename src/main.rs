@@ -2,6 +2,7 @@ mod rpc;
 mod service;
 mod sys;
 mod ui;
+mod web;
 
 use clap::Parser;
 use crossterm::{
@@ -83,27 +84,66 @@ const SCREEN_IBD: usize = 5;
 struct Args {
     #[arg(long, env = "KNOTS_RPC_URL", default_value = "http://127.0.0.1:8332")]
     rpc_url: String,
-    #[arg(long, env = "KNOTS_COOKIE_FILE", default_value = "~/.bitcoin/.cookie")]
-    cookie_file: String,
+    #[arg(long, env = "KNOTS_COOKIE_FILE")]
+    cookie_file: Option<String>,
+    #[arg(long, env = "KNOTS_RPC_USER")]
+    rpc_user: Option<String>,
+    #[arg(long, env = "KNOTS_RPC_PASSWORD")]
+    rpc_password: Option<String>,
     #[arg(long, default_value = "5")]
     interval: u64,
+    #[arg(long, env = "KNOTS_WEB_PORT")]
+    web_port: Option<u16>,
+    #[arg(long)]
+    demo: bool,
 }
 
-#[tokio::main(flavor = "current_thread")]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
-    let cookie_path = shellexpand::tilde(&args.cookie_file).to_string();
-    let cookie = match std::fs::read_to_string(&cookie_path) {
-        Ok(c) => c.trim().to_string(),
-        Err(e) => {
-            eprintln!("Failed to read cookie file '{}': {}", cookie_path, e);
-            eprintln!("Provide the path via --cookie-file or KNOTS_COOKIE_FILE env var.");
-            std::process::exit(1);
+    if args.demo {
+        let port = args.web_port.unwrap_or(3000);
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()?
+            .block_on(web::run_demo(port))?;
+        return Ok(());
+    }
+
+    let credentials = if let (Some(user), Some(pass)) = (&args.rpc_user, &args.rpc_password) {
+        format!("{}:{}", user, pass)
+    } else {
+        let cookie_path = args.cookie_file
+            .as_deref()
+            .unwrap_or("~/.bitcoin/.cookie");
+        let expanded = shellexpand::tilde(cookie_path).to_string();
+        match std::fs::read_to_string(&expanded) {
+            Ok(c) => c.trim().to_string(),
+            Err(e) => {
+                eprintln!("Failed to read cookie file '{}': {}", expanded, e);
+                eprintln!("Provide auth via --rpc-user/--rpc-password or --cookie-file.");
+                std::process::exit(1);
+            }
         }
     };
 
-    let client = RpcClient::new(&args.rpc_url, &cookie);
+    let client = RpcClient::new(&args.rpc_url, &credentials);
+
+    if let Some(port) = args.web_port {
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()?
+            .block_on(web::run(client, port, args.interval))?;
+        return Ok(());
+    }
+
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?
+        .block_on(tui_main(client, args.interval))
+}
+
+async fn tui_main(client: RpcClient, interval: u64) -> anyhow::Result<()> {
     let (tx, mut rx) = mpsc::channel::<NodeData>(4);
     let poll_notify = Arc::new(Notify::new());
     let poll_active = Arc::new(AtomicBool::new(true));
@@ -119,7 +159,7 @@ async fn main() -> anyhow::Result<()> {
     let poll_tx = tx.clone();
     let poll_force = force_full_fetch.clone();
     let poll_spinner = spinner_notify.clone();
-    let quick_interval = Duration::from_secs(args.interval);
+    let quick_interval = Duration::from_secs(interval);
     let full_interval = Duration::from_secs(60);
     tokio::spawn(async move {
         let mut last_height: u64 = 0;

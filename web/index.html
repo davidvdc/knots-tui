@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Knots TUI</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/luxon@3/build/global/luxon.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-luxon@1/dist/chartjs-adapter-luxon.umd.min.js"></script>
+<style>
+:root {
+  --bg: #1a1a2e; --card-bg: #16213e; --border: #0f3460;
+  --text: #e0e0e0; --dim: #888; --cyan: #00d4ff; --yellow: #ffd700;
+  --green: #00ff88; --red: #ff4444; --magenta: #ff66ff; --blue: #4488ff;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family:'Courier New',monospace; background:var(--bg); color:var(--text); padding:12px; font-size:14px; }
+.header { display:flex; justify-content:space-between; align-items:center; padding:8px 12px; border:1px solid var(--border); border-radius:6px; margin-bottom:12px; background:var(--card-bg); }
+.header-left { color:var(--cyan); font-weight:bold; }
+.header-right { color:var(--dim); font-size:12px; }
+.tabs { display:flex; gap:4px; margin-bottom:12px; flex-wrap:wrap; }
+.tab { padding:6px 14px; border:1px solid var(--border); border-radius:4px; background:var(--card-bg); color:var(--dim); cursor:pointer; font-family:inherit; font-size:12px; }
+.tab:hover { color:var(--text); border-color:var(--dim); }
+.tab.active { color:var(--cyan); border-color:var(--cyan); background:var(--bg); }
+.tab-content { display:none; }
+.tab-content.active { display:block; }
+.cards { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-bottom:12px; }
+@media(max-width:1000px){.cards{grid-template-columns:repeat(2,1fr);}}
+@media(max-width:550px){.cards{grid-template-columns:1fr;}}
+.card { border:1px solid var(--border); border-radius:6px; padding:10px 14px; background:var(--card-bg); }
+.card-title { font-weight:bold; margin-bottom:8px; font-size:13px; }
+.card-row { display:flex; justify-content:space-between; padding:2px 0; font-size:13px; }
+.card-row .label { color:var(--dim); white-space:nowrap; margin-right:8px; }
+.card-row .value { text-align:right; white-space:nowrap; }
+.sys-table { width:100%; border-collapse:collapse; font-size:12px; }
+.sys-table th,.sys-table td { text-align:right; padding:1px 4px; }
+.sys-table th { color:var(--cyan); font-weight:bold; }
+.sys-table th:first-child,.sys-table td:first-child { text-align:left; color:var(--dim); }
+.sys-sep td,.sys-sep th { padding-top:6px; }
+.section { border:1px solid var(--border); border-radius:6px; background:var(--card-bg); margin-bottom:12px; overflow-x:auto; }
+.section-title { padding:8px 14px 0 14px; font-weight:bold; font-size:13px; color:var(--yellow); }
+.data-table { width:100%; border-collapse:collapse; font-size:12px; white-space:nowrap; }
+.data-table th { color:var(--cyan); font-weight:bold; text-align:right; padding:4px 8px; border-bottom:1px solid var(--border); }
+.data-table th:first-child { text-align:left; }
+.data-table td { padding:3px 8px; text-align:right; }
+.data-table td:first-child { text-align:left; }
+.data-table tr:hover { background:rgba(255,255,255,0.03); }
+.data-table .clickable { cursor:pointer; }
+.data-table .clickable:hover { background:rgba(0,212,255,0.08); }
+.cyan{color:var(--cyan);}.yellow{color:var(--yellow);}.green{color:var(--green);}.red{color:var(--red);}.magenta{color:var(--magenta);}.blue{color:var(--blue);}.dim{color:var(--dim);}.bold{font-weight:bold;}
+.connecting { text-align:center; padding:40px; color:var(--yellow); }
+.error { text-align:center; padding:20px; color:var(--red); border:1px solid var(--red); border-radius:6px; margin-bottom:12px; }
+.modal-overlay { display:none; position:fixed; top:0;left:0;right:0;bottom:0; background:rgba(0,0,0,0.7); z-index:100; justify-content:center; align-items:center; }
+.modal-overlay.active { display:flex; }
+.modal { background:var(--bg); border:2px solid var(--cyan); border-radius:8px; padding:16px; max-width:90vw; max-height:85vh; overflow:auto; min-width:500px; }
+.modal-title { color:var(--cyan); font-weight:bold; font-size:15px; margin-bottom:12px; }
+.modal-close { float:right; cursor:pointer; color:var(--dim); font-size:13px; }
+.modal-close:hover { color:var(--text); }
+.modal-row { font-size:13px; margin-bottom:2px; }
+.modal-table { width:100%; border-collapse:collapse; font-size:12px; white-space:nowrap; margin:8px 0; }
+.modal-table th { font-weight:bold; text-align:right; padding:3px 6px; border-bottom:1px solid var(--border); }
+.modal-table th:first-child { text-align:left; }
+.modal-table td { padding:2px 6px; text-align:right; }
+.modal-table td:first-child { text-align:left; }
+.bip110-desc { font-size:11px; color:var(--dim); margin-top:4px; }
+.bip110-desc span.rule { color:var(--red); }
+.chart-controls { display:flex; gap:8px; padding:8px 14px; }
+.chart-btn { padding:4px 12px; border:1px solid var(--border); border-radius:4px; background:var(--card-bg); color:var(--dim); cursor:pointer; font-family:inherit; font-size:12px; }
+.chart-btn:hover { color:var(--text); }
+.chart-btn.active { color:var(--yellow); border-color:var(--yellow); }
+.chart-container { position:relative; height:300px; padding:8px 14px; }
+.ibd-bar { font-family:monospace; font-size:14px; color:var(--yellow); }
+.ibd-row { padding:2px 0; font-size:13px; }
+</style>
+</head>
+<body>
+<div class="header">
+  <span class="header-left">knots-tui</span>
+  <span class="header-right" id="status">connecting...</span>
+</div>
+<div id="error-box" class="error" style="display:none"></div>
+<div id="connecting" class="connecting">Connecting to Bitcoin Knots node...</div>
+
+<div id="content" style="display:none">
+<div class="tabs" id="tab-bar"></div>
+
+<!-- Dashboard -->
+<div class="tab-content" id="tab-dashboard">
+  <div class="cards">
+    <div class="card"><div class="card-title cyan">Blockchain</div>
+      <div class="card-row"><span class="label">Height</span><span class="value yellow bold" id="bc-height">-</span></div>
+      <div class="card-row"><span class="label">Headers</span><span class="value" id="bc-headers">-</span></div>
+      <div class="card-row"><span class="label">Synced</span><span class="value" id="bc-synced">-</span></div>
+      <div class="card-row"><span class="label">Difficulty</span><span class="value" id="bc-difficulty">-</span></div>
+      <div class="card-row"><span class="label">Hashrate</span><span class="value yellow" id="bc-hashrate">-</span></div>
+      <div class="card-row"><span class="label">Disk</span><span class="value" id="bc-disk">-</span></div>
+    </div>
+    <div class="card"><div class="card-title magenta">Mempool</div>
+      <div class="card-row"><span class="label">TXs</span><span class="value yellow bold" id="mp-txs">-</span></div>
+      <div class="card-row"><span class="label">Size</span><span class="value" id="mp-size">-</span></div>
+      <div class="card-row"><span class="label">Memory</span><span class="value" id="mp-memory">-</span></div>
+      <div class="card-row"><span class="label">Fees</span><span class="value green" id="mp-fees">-</span></div>
+      <div class="card-row"><span class="label">Min fee</span><span class="value" id="mp-minfee">-</span></div>
+      <div class="card-row"><span class="label">Relay fee</span><span class="value" id="mp-relayfee">-</span></div>
+      <div class="card-row"><span class="label">Loaded</span><span class="value" id="mp-loaded">-</span></div>
+    </div>
+    <div class="card"><div class="card-title green">Network</div>
+      <div class="card-row"><span class="label">Conns</span><span class="value yellow bold" id="net-conns">-</span></div>
+      <div class="card-row"><span class="label">Protocol</span><span class="value" id="net-protocol">-</span></div>
+      <div class="card-row"><span class="label">Recv</span><span class="value green" id="net-recv">-</span></div>
+      <div class="card-row"><span class="label">Sent</span><span class="value red" id="net-sent">-</span></div>
+      <div class="card-row"><span class="label">Relay fee</span><span class="value" id="net-relayfee">-</span></div>
+      <div class="card-row"><span class="label">Incr fee</span><span class="value" id="net-incrfee">-</span></div>
+      <div class="card-row" id="net-local-row" style="display:none"><span class="label">Local</span><span class="value" id="net-local" style="font-size:11px">-</span></div>
+    </div>
+    <div class="card"><div class="card-title yellow">System</div>
+      <div><table class="sys-table" id="sys-table"></table></div>
+    </div>
+  </div>
+  <div class="section"><div class="section-title" id="blocks-title">Recent Blocks</div><table class="data-table" id="blocks-table"></table></div>
+  <div class="section" id="analytics-section" style="display:none"><div class="section-title cyan">Analytics (24h)</div><table class="data-table" id="analytics-table"></table></div>
+  <div class="section"><div class="section-title" id="peers-title" style="color:var(--cyan)">Peers</div><table class="data-table" id="peers-table"></table></div>
+</div>
+
+<!-- IBD -->
+<div class="tab-content" id="tab-ibd">
+  <div class="section" style="padding:14px" id="ibd-info"></div>
+  <div class="section"><div class="section-title cyan">System</div><div id="ibd-sys" style="padding:8px 14px"></div></div>
+  <div class="section"><div class="section-title cyan" id="ibd-peers-title">Peers</div><table class="data-table" id="ibd-peers-table"></table></div>
+</div>
+
+<!-- Known Peers -->
+<div class="tab-content" id="tab-known-peers">
+  <div class="section"><div class="section-title" id="kp-time-title" style="color:var(--cyan)">Known Addresses by Last Seen</div><table class="data-table" id="kp-time-table"></table></div>
+  <div class="section"><div class="section-title" style="color:var(--yellow)">Services by Network (* = this node)</div><table class="data-table" id="kp-services-table"></table></div>
+</div>
+
+<!-- Signaling -->
+<div class="tab-content" id="tab-signaling">
+  <div class="section"><div class="section-title" id="sig-bits-title" style="color:var(--yellow)">Version Bit Signaling</div><table class="data-table" id="sig-bits-table"></table></div>
+  <div class="section"><div class="section-title" id="sig-forks-title" style="color:var(--cyan)">Softforks</div><table class="data-table" id="sig-forks-table"></table></div>
+</div>
+
+<!-- Analytics -->
+<div class="tab-content" id="tab-analytics">
+  <div class="section"><div class="section-title" id="ana-title" style="color:var(--cyan)">Daily Breakdown</div><table class="data-table" id="ana-table"></table></div>
+</div>
+
+<!-- Charts -->
+<div class="tab-content" id="tab-charts">
+  <div class="section">
+    <div class="chart-controls"><button class="chart-btn active" onclick="setChartMode(0)">OPNET</button><button class="chart-btn" onclick="setChartMode(1)">Data</button><button class="chart-btn" onclick="setChartMode(2)">BIP-110</button></div>
+    <div class="section-title" id="chart-daily-title" style="color:var(--cyan)">Daily</div>
+    <div class="chart-container"><canvas id="chart-daily"></canvas></div>
+    <div class="section-title" id="chart-hourly-title" style="color:var(--cyan)">24h Rolling Window (hourly)</div>
+    <div class="chart-container"><canvas id="chart-hourly"></canvas></div>
+  </div>
+</div>
+</div>
+
+<div class="modal-overlay" id="block-modal"><div class="modal" id="block-modal-content"></div></div>
+<div class="modal-overlay" id="bit-modal"><div class="modal" id="bit-modal-content" style="min-width:400px;max-width:600px"></div></div>
+
+<script>
+// ===== Formatting =====
+const fmtNum = n => n == null ? '-' : n.toLocaleString('en-US');
+function fmtBytes(b){if(!b)return'0 B';if(b<1024)return b+' B';if(b<1048576)return(b/1024).toFixed(1)+' KB';if(b<1073741824)return(b/1048576).toFixed(1)+' MB';if(b<1099511627776)return(b/1073741824).toFixed(2)+' GB';return(b/1099511627776).toFixed(2)+' TB';}
+function fmtBytesS(b){if(!b)return'0B';if(b<1024)return b+'B';if(b<102400)return(b/1024).toFixed(1)+'K';if(b<1048576)return Math.round(b/1024)+'K';if(b<104857600)return(b/1048576).toFixed(1)+'M';if(b<1073741824)return Math.round(b/1048576)+'M';if(b<107374182400)return(b/1073741824).toFixed(1)+'G';return Math.round(b/1073741824)+'G';}
+function fmtHash(h){if(h>=1e18)return(h/1e18).toFixed(2)+' EH/s';if(h>=1e15)return(h/1e15).toFixed(2)+' PH/s';if(h>=1e12)return(h/1e12).toFixed(2)+' TH/s';if(h>=1e9)return(h/1e9).toFixed(2)+' GH/s';return h.toFixed(0)+' H/s';}
+function fmtBtc(s){const b=s/1e8;return b>=1000?b.toFixed(0)+' BTC':b.toFixed(2)+' BTC';}
+function fmtFees(s){return(s/1e8).toFixed(3)+' BTC';}
+function fmtDur(s){if(!s||s<=0)return'-';const d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60);if(d>0)return d+'d '+h+'h '+m+'m';if(h>0)return h+'h '+m+'m';return m+'m';}
+function fmtCompact(n){if(n<1e3)return''+n;if(n<1e4)return(n/1e3).toFixed(1)+'k';if(n<1e6)return Math.floor(n/1e3)+'k';if(n<1e7)return(n/1e6).toFixed(1)+'m';return Math.floor(n/1e6)+'m';}
+function pctS(n,t){return t>0?(n/t*100).toFixed(1):'0.0';}
+function pctC(p,h,m){return p>h?'var(--red)':p>m?'var(--yellow)':'var(--green)';}
+function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML;}
+const now=()=>Math.floor(Date.now()/1000);
+
+// ===== State =====
+let dashData=null, sigData=null, anaData=null;
+let activeTab='dashboard', chartMode=0;
+let dailyChart=null, hourlyChart=null;
+
+// ===== Tabs =====
+const tabDefs=[
+  {id:'dashboard',label:'Dashboard',ibd:false},
+  {id:'ibd',label:'IBD',ibd:true},
+  {id:'known-peers',label:'Known Peers',ibd:null},
+  {id:'signaling',label:'Signaling',ibd:null},
+  {id:'analytics',label:'Analytics',ibd:false},
+  {id:'charts',label:'Charts',ibd:false},
+];
+
+function switchTab(id){
+  activeTab=id;
+  document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active',t.dataset.tab===id));
+  document.querySelectorAll('.tab-content').forEach(c=>c.classList.toggle('active',c.id==='tab-'+id));
+  if(id==='signaling'&&!sigData)fetchSignaling();
+  if((id==='analytics'||id==='charts')&&!anaData)fetchAnalytics();
+  // Immediately render the tab with whatever data we already have
+  if(dashData&&dashData.node){
+    const n=dashData.node;
+    if(id==='dashboard'){renderBlockchainCard(n);renderMempoolCard(n);renderNetworkCard(n);renderSystemCard(dashData.system,n);renderBlocksTable(n,dashData.block_stats||{});renderAnalyticsSummary(dashData.block_stats||{});renderPeersTable(n,'peers-table','peers-title');}
+    if(id==='ibd'){renderIBD(n,dashData.system);renderPeersTable(n,'ibd-peers-table','ibd-peers-title');}
+    if(id==='known-peers')renderKnownPeers(n);
+  }
+  if(id==='signaling'&&sigData)renderSignaling(sigData.node);
+  if(id==='analytics'&&anaData)renderFullAnalytics(anaData.stats);
+  if(id==='charts')renderCharts();
+}
+
+function renderTabs(isIbd){
+  const bar=document.getElementById('tab-bar');
+  bar.innerHTML='';
+  for(const t of tabDefs){
+    if(t.ibd===true&&!isIbd)continue;
+    if(t.ibd===false&&isIbd)continue;
+    const btn=document.createElement('button');
+    btn.className='tab'+(activeTab===t.id?' active':'');
+    btn.textContent=t.label;
+    btn.dataset.tab=t.id;
+    btn.onclick=()=>switchTab(t.id);
+    bar.appendChild(btn);
+  }
+}
+
+// ===== Dashboard renders =====
+function renderBlockchainCard(n){
+  const bc=n.blockchain,p=bc.verificationprogress*100,s=p>=99.99;
+  document.getElementById('bc-height').textContent=fmtNum(bc.blocks);
+  document.getElementById('bc-headers').textContent=fmtNum(bc.headers);
+  const el=document.getElementById('bc-synced');el.textContent=(s?'YES':'syncing')+' ('+p.toFixed(2)+'%)';el.className='value '+(s?'green':'yellow');
+  document.getElementById('bc-difficulty').textContent=bc.difficulty.toExponential(2);
+  document.getElementById('bc-hashrate').textContent=fmtHash(n.mining.networkhashps);
+  document.getElementById('bc-disk').textContent=fmtBytes(bc.size_on_disk)+(bc.pruned?' (pruned)':'');
+}
+function renderMempoolCard(n){
+  const m=n.mempool;
+  document.getElementById('mp-txs').textContent=fmtNum(m.size);
+  document.getElementById('mp-size').textContent=fmtBytes(m.bytes);
+  document.getElementById('mp-memory').textContent=fmtBytes(m.usage)+' / '+fmtBytes(m.maxmempool);
+  document.getElementById('mp-fees').textContent=m.total_fee.toFixed(8)+' BTC';
+  document.getElementById('mp-minfee').textContent=m.mempoolminfee.toFixed(8)+' BTC/kvB';
+  document.getElementById('mp-relayfee').textContent=m.minrelaytxfee.toFixed(8)+' BTC/kvB';
+  const el=document.getElementById('mp-loaded');el.textContent=m.loaded?'yes':'no';el.className='value '+(m.loaded?'green':'yellow');
+}
+function renderNetworkCard(n){
+  const net=n.network,nt=n.net_totals;
+  document.getElementById('net-conns').textContent=net.connections+' (in: '+net.connections_in+' / out: '+net.connections_out+')';
+  document.getElementById('net-protocol').textContent=net.protocolversion;
+  document.getElementById('net-recv').textContent=fmtBytesS(nt.totalbytesrecv);
+  document.getElementById('net-sent').textContent=fmtBytesS(nt.totalbytessent);
+  document.getElementById('net-relayfee').textContent=net.relayfee.toFixed(8)+' BTC/kvB';
+  document.getElementById('net-incrfee').textContent=net.incrementalfee.toFixed(8)+' BTC/kvB';
+  const lr=document.getElementById('net-local-row');
+  if(net.localaddresses&&net.localaddresses.length>0){lr.style.display='flex';document.getElementById('net-local').textContent=net.localaddresses.map(a=>a.address+':'+a.port).join(', ');}else lr.style.display='none';
+}
+function renderSystemCard(sys,n){
+  const t=document.getElementById('sys-table');
+  if(!sys.cpus||!sys.cpus.length){t.innerHTML='<tr><td class="dim" style="text-align:left">No system data (Linux only)</td></tr>';return;}
+  const uT=(n.peers||[]).some(p=>p.addr.includes('.onion'))||(n.network.localaddresses||[]).some(a=>a.address.includes('.onion'));
+  const sB=sys.bitcoind&&sys.bitcoind.found,sT=uT&&sys.tor&&sys.tor.found;
+  const cpu=sys.cpus.reduce((s,c)=>s+c.user_pct+c.system_pct+c.nice_pct+c.iowait_pct,0)/sys.cpus.length;
+  let h='<tr><th></th><th>Sys</th>';if(sB)h+='<th>Btc</th>';if(sT)h+='<th style="color:var(--magenta)">Tor</th>';h+='<th class="dim">Of</th></tr>';
+  h+='<tr><td>CPU</td><td style="color:'+pctC(cpu,80,50)+'">'+cpu.toFixed(0)+'%</td>';if(sB)h+='<td style="color:'+pctC(sys.bitcoind.cpu_pct,80,30)+'">'+sys.bitcoind.cpu_pct.toFixed(0)+'%</td>';if(sT)h+='<td style="color:'+pctC(sys.tor.cpu_pct,50,10)+'">'+sys.tor.cpu_pct.toFixed(0)+'%</td>';h+='<td class="dim">'+sys.cpus.length+'c</td></tr>';
+  h+='<tr><td>Mem</td><td>'+fmtBytesS(sys.mem.used)+'</td>';if(sB)h+='<td>'+fmtBytesS(sys.bitcoind.rss)+'</td>';if(sT)h+='<td>'+fmtBytesS(sys.tor.rss)+'</td>';h+='<td class="dim">'+fmtBytesS(sys.mem.total)+'</td></tr>';
+  if(sys.mem.swap_total>0&&sys.mem.swap_used>0){const sp=sys.mem.swap_used/sys.mem.swap_total*100;h+='<tr><td>Swp</td><td style="color:'+pctC(sp,50,10)+'">'+fmtBytesS(sys.mem.swap_used)+'</td>';if(sB)h+='<td></td>';if(sT)h+='<td></td>';h+='<td class="dim">'+fmtBytesS(sys.mem.swap_total)+'</td></tr>';}
+  const dk=(sys.disks||[]).slice(0,4);if(dk.length){const x=(sB?1:0)+(sT?1:0)+1-dk.length;h+='<tr class="sys-sep"><td></td>';for(const d of dk)h+='<th>'+esc(d.name)+'</th>';for(let i=0;i<x;i++)h+='<th></th>';h+='</tr><tr><td>IO R</td>';for(const d of dk)h+='<td style="color:var(--green)">'+fmtBytesS(d.read_per_sec)+'</td>';for(let i=0;i<x;i++)h+='<td></td>';h+='</tr><tr><td>IO W</td>';for(const d of dk)h+='<td style="color:var(--yellow)">'+fmtBytesS(d.write_per_sec)+'</td>';for(let i=0;i<x;i++)h+='<td></td>';h+='</tr>';}
+  t.innerHTML=h;
+}
+
+function renderBlocksTable(n,bs){
+  const blocks=n.recent_blocks||[],t=now();
+  document.getElementById('blocks-title').textContent='Recent Blocks ('+blocks.length+')';
+  let h='<tr><th style="text-align:left">Height</th><th>Time</th><th>TXs</th><th>Size</th><th>Weight</th><th>Age</th><th>BIP110</th><th>BTC Out</th><th>Fees</th><th>Fin%</th><th>!110</th><th>%</th></tr>';
+  for(const b of blocks){
+    const s=bs[b.height],ok=!!s,age=(b.time>0&&t>b.time)?fmtDur(t-b.time):'-';
+    const bip=(b.version>=0x20000000&&(b.version&(1<<4))!==0)?'yes':'no',bc=bip==='yes'?'var(--green)':'var(--dim)';
+    const ts=b.time>0?new Date(b.time*1000).toISOString().slice(5,16).replace('T',' '):'-';
+    let bo='-',fe='-',fp='-',fc='var(--dim)',vc='-',vp='',vx='var(--dim)';
+    if(ok){bo=fmtBtc(s.total_out);fe=fmtFees(s.total_fee);const ut=s.tx_count-1,f=ut>0?s.financial_count/ut*100:100;fp=f.toFixed(0)+'%';fc=f>=90?'var(--green)':f>=70?'var(--yellow)':'var(--red)';const v=ut>0?s.bip110_violating_txs/ut*100:0;vc=''+s.bip110_violating_txs;vx=s.bip110_violating_txs===0?'var(--green)':v<=1?'var(--yellow)':'var(--red)';vp=s.bip110_violating_txs>0?v.toFixed(1)+'%':'';}
+    const cl=ok?' class="clickable" onclick="showBlockModal('+b.height+')"':'';
+    h+='<tr'+cl+'><td style="text-align:left">'+fmtNum(b.height)+'</td><td>'+ts+'</td><td>'+fmtNum(b.tx_count)+'</td><td>'+fmtBytesS(b.size)+'</td><td>'+(b.weight/1e3).toFixed(1)+' kvWU</td><td>'+age+'</td><td style="color:'+bc+'">'+bip+'</td><td>'+bo+'</td><td>'+fe+'</td><td style="color:'+fc+'">'+fp+'</td><td style="color:'+vx+'">'+vc+'</td><td style="color:'+vx+'">'+vp+'</td></tr>';
+  }
+  document.getElementById('blocks-table').innerHTML=h;
+}
+
+function renderAnalyticsSummary(bs){
+  const cut=now()-86400,stats=Object.values(bs).filter(s=>s.time>=cut),sec=document.getElementById('analytics-section');
+  if(!stats.length){sec.style.display='none';return;}sec.style.display='block';
+  let a={bl:0,tx:0,fi:0,ru:0,in_:0,br:0,op:0,st:0,or:0,v:0,vs:0,tv:0,fv:0};
+  for(const s of stats){a.bl++;const u=s.tx_count-1;a.tx+=u;a.fi+=s.financial_count;a.ru+=s.rune_count;a.in_+=s.inscription_count;a.br+=s.brc20_count;a.op+=s.opnet_count;a.st+=s.stamp_count;a.or+=s.opreturn_other_count;a.v+=s.bip110_violating_txs;a.vs+=s.bip110_violating_size;a.tv+=s.total_vsize;a.fv+=s.financial_vsize;}
+  const dt=a.tx-a.fi,dv=a.tv-a.fv,vp=a.tx>0?a.v/a.tx*100:0,vC=a.v===0?'var(--green)':vp<=1?'var(--yellow)':'var(--red)';
+  const dc=c=>c>0?'var(--magenta)':'var(--dim)';
+  let h='<tr><th style="text-align:left">Period</th><th>Blks</th><th>TXs</th><th>Fin%</th><th>FinSz</th><th>Dat%</th><th>DatSz</th><th style="color:var(--magenta)">Rune</th><th style="color:var(--magenta)">Insc</th><th style="color:var(--magenta)">BRC</th><th style="color:var(--magenta)">OPN</th><th style="color:var(--magenta)">Stp</th><th style="color:var(--magenta)">OPR</th><th style="color:var(--red)">!110</th><th style="color:var(--red)">%</th><th style="color:var(--red)">Saved</th></tr>';
+  h+='<tr><td style="text-align:left">24h</td><td class="dim">'+fmtCompact(a.bl)+'</td><td>'+fmtCompact(a.tx)+'</td><td style="color:var(--green)">'+pctS(a.fi,a.tx)+'%</td><td style="color:var(--green)">'+pctS(a.fv,a.tv)+'%</td><td style="color:'+(dt>0?'var(--yellow)':'var(--dim)')+'">'+pctS(dt,a.tx)+'%</td><td style="color:'+(dv>0?'var(--yellow)':'var(--dim)')+'">'+pctS(dv,a.tv)+'%</td>';
+  h+='<td style="color:'+dc(a.ru)+'">'+fmtCompact(a.ru)+'</td><td style="color:'+dc(a.in_)+'">'+fmtCompact(a.in_)+'</td><td style="color:'+dc(a.br)+'">'+fmtCompact(a.br)+'</td><td style="color:'+dc(a.op)+'">'+fmtCompact(a.op)+'</td><td style="color:'+dc(a.st)+'">'+fmtCompact(a.st)+'</td><td style="color:'+dc(a.or)+'">'+fmtCompact(a.or)+'</td>';
+  h+='<td style="color:'+vC+'">'+fmtCompact(a.v)+'</td><td style="color:'+vC+'">'+(a.v>0?vp.toFixed(1)+'%':'')+'</td><td style="color:'+vC+'">'+(a.vs>0?fmtBytesS(a.vs):'')+'</td></tr>';
+  document.getElementById('analytics-table').innerHTML=h;
+}
+
+function renderPeersTable(n,tableId,titleId){
+  const peers=n.peers||[],tk=n.known_addresses||[],bk=tk.filter(a=>(a.services&(1<<27))!==0).length;
+  let title='Peers ('+peers.length+') | known: '+fmtNum(n.known_peers);
+  if(tk.length>0&&bk>0)title+=' | BIP110: '+(bk/tk.length*100).toFixed(1)+'%';
+  document.getElementById(titleId).textContent=title;
+  const t=n.fetched_at||now();
+  let h='<tr><th style="text-align:left">ID</th><th style="text-align:left">Address</th><th style="text-align:left">Client</th><th style="text-align:left">Type</th><th>TX</th><th>Dir</th><th>Height</th><th>Ping</th><th>Conn</th><th>Sent</th><th>Recv</th></tr>';
+  for(const p of peers){
+    const c=p.inbound?'var(--text)':'var(--dim)';
+    h+='<tr style="color:'+c+'"><td style="text-align:left">'+p.id+'</td><td style="text-align:left">'+esc(p.addr)+'</td><td style="text-align:left">'+esc(p.subver.replace(/\//g,''))+'</td><td style="text-align:left">'+esc(p.connection_type)+'</td><td>'+(p.relaytxes?'yes':'no')+'</td><td>'+(p.inbound?'in':'out')+'</td><td>'+p.synced_blocks+'</td><td>'+(p.pingtime!=null?(p.pingtime*1000).toFixed(0)+'ms':'-')+'</td><td>'+((p.conntime>0&&t>p.conntime)?fmtDur(t-p.conntime):'-')+'</td><td>'+fmtBytesS(p.bytessent)+'</td><td>'+fmtBytesS(p.bytesrecv)+'</td></tr>';
+  }
+  document.getElementById(tableId).innerHTML=h;
+}
+
+// ===== IBD =====
+function renderIBD(n,sys){
+  const bc=n.blockchain,net=n.network,p=(bc.verificationprogress*100).toFixed(2);
+  const rem=bc.headers-bc.blocks;
+  const eta=n.ibd_blocks_per_sec>0.1?'~'+fmtDur(Math.round(rem/n.ibd_blocks_per_sec)):'-';
+  const spd=n.ibd_blocks_per_sec>0.1?n.ibd_blocks_per_sec.toFixed(1)+' blk/s':'-';
+  const dl=n.ibd_recv_per_sec>0?fmtBytes(n.ibd_recv_per_sec)+'/s':'-';
+  const tip=bc.time>0?new Date(bc.time*1000).toISOString().slice(0,16).replace('T',' '):'-';
+  const bw=40,fi=Math.min(Math.round(bc.verificationprogress*bw),bw);
+  let h='<div class="ibd-bar">['+('#').repeat(fi)+(' ').repeat(bw-fi)+'] '+p+'%</div>';
+  h+='<div class="ibd-row"><span class="dim">Synced: </span>'+fmtNum(bc.blocks)+' / '+fmtNum(bc.headers)+' blocks <span class="dim">tip:</span> <span class="cyan">'+tip+'</span></div>';
+  h+='<div class="ibd-row"><span class="dim">Speed: </span><span class="cyan">'+spd+'</span> <span class="dim">ETA:</span> '+eta+'</div>';
+  h+='<div class="ibd-row"><span class="dim">Peers: </span>'+net.connections+' (in: '+net.connections_in+' / out: '+net.connections_out+')</div>';
+  h+='<div class="ibd-row"><span class="dim">Download: </span><span class="green">'+dl+'</span> <span class="dim">total recv:</span> '+fmtBytes(n.net_totals.totalbytesrecv)+'</div>';
+  h+='<div class="ibd-row"><span class="dim">Disk: </span>'+fmtBytes(bc.size_on_disk)+' <span class="dim">Difficulty:</span> '+bc.difficulty.toExponential(2)+'</div>';
+  document.getElementById('ibd-info').innerHTML=h;
+  // System bars
+  let sh='';
+  if(sys.cpus&&sys.cpus.length){
+    for(let i=0;i<sys.cpus.length;i++){const c=sys.cpus[i],tot=Math.min(c.user_pct+c.system_pct+c.nice_pct+c.iowait_pct,100);sh+='<div style="font-size:12px"><span class="dim" style="display:inline-block;width:30px;text-align:right">'+i+'</span> <span style="color:var(--green)">'+tot.toFixed(0)+'%</span></div>';}
+    if(sys.mem.total>0){const mp=sys.mem.used/sys.mem.total*100;sh+='<div style="font-size:12px"><span class="dim" style="display:inline-block;width:30px;text-align:right">Mem</span> <span style="color:'+pctC(mp,80,50)+'">'+fmtBytesS(sys.mem.used)+'/'+fmtBytesS(sys.mem.total)+'</span></div>';}
+  }else sh='<span class="dim">No system data</span>';
+  document.getElementById('ibd-sys').innerHTML=sh;
+}
+
+// ===== Known Peers =====
+function renderKnownPeers(n){
+  const addrs=n.known_addresses||[],ft=n.fetched_at||now();
+  document.getElementById('kp-time-title').textContent='Known Addresses ('+fmtNum(n.known_peers)+') by Last Seen';
+  const cuts=[3600,14400,86400,604800,2592000,7776000],labs=['<1h','<4h','<24h','<7d','<30d','<90d','>90d'];
+  const byNet={};
+  for(const a of addrs){const net=a.network||'unknown';if(!byNet[net])byNet[net]=new Array(cuts.length+1).fill(0);const age=ft-a.time;let placed=false;for(let i=0;i<cuts.length;i++){if(age<cuts[i]){byNet[net][i]++;placed=true;break;}}if(!placed)byNet[net][cuts.length]++;}
+  const nets=Object.keys(byNet).sort();
+  const nc={'ipv4':'var(--green)','ipv6':'var(--blue)','onion':'var(--magenta)','i2p':'var(--yellow)','cjdns':'var(--cyan)'};
+  let h='<tr><th style="text-align:left">Network</th>';for(const l of labs)h+='<th>'+l+'</th>';h+='<th>Total</th></tr>';
+  for(const net of nets){const b=byNet[net],tot=b.reduce((a,v)=>a+v,0),c=nc[net]||'var(--text)';h+='<tr style="color:'+c+'"><td style="text-align:left">'+esc(net)+'</td>';for(const v of b)h+='<td>'+fmtNum(v)+'</td>';h+='<td>'+fmtNum(tot)+'</td></tr>';}
+  document.getElementById('kp-time-table').innerHTML=h;
+  // Services
+  const localSvc=parseInt(n.network.localservices,16)||0;
+  let allBits=0n;for(const a of addrs)allBits|=BigInt(a.services);
+  const activeBits=[];for(let b=0;b<64;b++)if(allBits&(1n<<BigInt(b)))activeBits.push(b);
+  const byNetSvc={};for(const a of addrs){const net=a.network||'unknown';if(!byNetSvc[net])byNetSvc[net]={total:0,bits:new Array(activeBits.length).fill(0)};byNetSvc[net].total++;for(let i=0;i<activeBits.length;i++)if(a.services&(1<<activeBits[i]))byNetSvc[net].bits[i]++;}
+  const svcNets=Object.keys(byNetSvc).sort();
+  const grand=svcNets.reduce((s,n)=>s+byNetSvc[n].total,0);
+  const bitNames={0:'NODE_NETWORK',1:'NODE_GETUTXO',2:'NODE_BLOOM',3:'NODE_WITNESS',4:'NODE_XTHIN',5:'NODE_BITCOIN_CASH',6:'NODE_COMPACT_FILTERS',10:'NODE_NETWORK_LIMITED',11:'NODE_P2P_V2',24:'NODE_P2P_V2',26:'NODE_FULL_RBF',27:'NODE_REDUCED_DATA',29:'MALICIOUS'};
+  const bitDesc={0:'All blocks since genesis',1:'UTXO queries (BIP64)',2:'Bloom filters (BIP111)',3:'SegWit (BIP144)',4:'Xtreme Thinblocks',5:'BCH fork (stale)',6:'Compact filters (BIP157)',10:'Pruned, last 288 blocks',11:'v2 transport (old bit)',24:'v2 transport (BIP324)',26:'Full RBF',27:'BIP-110 ReducedData',29:'Flagged malicious'};
+  const bitTotals=activeBits.map((_,i)=>{let t=0;for(const n of svcNets)t+=byNetSvc[n].bits[i];return t;});
+  const sorted=activeBits.map((_,i)=>i).sort((a,b)=>bitTotals[b]-bitTotals[a]);
+  const cp=(c,t)=>t>0?fmtNum(c)+' ('+(c/t*100).toFixed(0)+'%)':'0';
+  let sh='<tr><th style="text-align:center;width:20px"></th><th style="text-align:right;width:30px">Bit</th><th style="text-align:left">Service</th>';for(const n of svcNets)sh+='<th>'+esc(n)+'</th>';sh+='<th>TOTAL</th><th style="text-align:left">Description</th></tr>';
+  for(const si of sorted){const bit=activeBits[si],isLocal=localSvc&(1<<bit),mk=isLocal?'*':'',nm=bitNames[bit]||'',desc=bitDesc[bit]||(bit>=24?'Experimental':'');
+    sh+='<tr style="color:'+(isLocal?'var(--green)':'var(--text)')+'"><td style="text-align:center;color:var(--yellow)">'+mk+'</td><td style="text-align:right">'+bit+'</td><td style="text-align:left">'+esc(nm)+'</td>';
+    for(const n of svcNets)sh+='<td>'+cp(byNetSvc[n].bits[si],byNetSvc[n].total)+'</td>';
+    sh+='<td>'+cp(bitTotals[si],grand)+'</td><td style="text-align:left;color:var(--dim)">'+esc(desc)+'</td></tr>';}
+  document.getElementById('kp-services-table').innerHTML=sh;
+}
+
+// ===== Signaling =====
+function renderSignaling(n){
+  const vers=n.recent_block_versions||[],forks=n.softforks||{};
+  const total=vers.length;
+  document.getElementById('sig-bits-title').textContent='Version Bit Signaling (last '+total+' blocks)';
+  const bitCounts={};for(const[_,v]of vers)if(v>=0x20000000)for(let b=0;b<29;b++)if(v&(1<<b)){bitCounts[b]=(bitCounts[b]||0)+1;}
+  const bitNames={0:'csv',1:'segwit',2:'taproot',4:'reduced_data'};
+  for(const[name,fork]of Object.entries(forks))if(fork.bip9&&fork.bip9.bit!=null)bitNames[fork.bip9.bit]=name;
+  const bitDescs={};for(let b=0;b<13;b++)bitDescs[b]='Unassigned';for(let b=13;b<=28;b++)bitDescs[b]='BIP320 nonce rolling (ASICBoost)';
+  bitDescs[0]='Relative lock-time (BIP68/112/113)';bitDescs[1]='Segregated Witness (BIP141/143/147)';bitDescs[2]='Taproot/Schnorr (BIP340/341/342)';bitDescs[4]='Reduced Data Softfork (BIP110)';
+  let h='<tr><th style="text-align:left">Bit</th><th style="text-align:left">Name</th><th>Signaling</th><th>Pct</th><th style="text-align:left">Description</th></tr>';
+  for(let b=0;b<29;b++){const c=bitCounts[b]||0,is320=b>=13&&b<=28,p=total>0?c/total*100:0;
+    const clr=is320?'var(--dim)':p>=95?'var(--green)':p>=50?'var(--yellow)':'var(--text)';
+    h+='<tr class="clickable" onclick="showBitModal('+b+')" style="color:'+clr+'"><td style="text-align:left">'+b+'</td><td style="text-align:left">'+(bitNames[b]||'')+'</td><td>'+fmtNum(c)+'/'+fmtNum(total)+'</td><td>'+p.toFixed(1)+'%</td><td style="text-align:left">'+(bitDescs[b]||'')+'</td></tr>';}
+  document.getElementById('sig-bits-table').innerHTML=h;
+  // Softforks
+  const buried={bip34:{t:'buried',a:true,h:227931},bip66:{t:'buried',a:true,h:363725},bip65:{t:'buried',a:true,h:388381},csv:{t:'buried',a:true,h:419328},segwit:{t:'buried',a:true,h:481824},taproot:{t:'buried',a:true,h:709632}};
+  const merged={...buried};for(const[k,v]of Object.entries(forks))merged[k]={t:v.fork_type,a:v.active,h:v.height,bip9:v.bip9};
+  const sorted2=Object.entries(merged).sort(([,a],[,b])=>{if(a.t!=='buried'&&b.t==='buried')return-1;if(a.t==='buried'&&b.t!=='buried')return 1;return(b.h||Infinity)-(a.h||Infinity);});
+  document.getElementById('sig-forks-title').textContent='Softforks ('+sorted2.length+')';
+  let fh='<tr><th style="text-align:left">Name</th><th>Type</th><th>Active</th><th>Height</th><th>Status</th><th>Bit</th><th style="text-align:left">Progress</th></tr>';
+  for(const[name,f]of sorted2){const ib=f.t==='buried';let st=ib?'buried':'-',bit='-',prog='-';
+    if(f.bip9){st=f.bip9.status;bit=f.bip9.bit!=null?''+f.bip9.bit:'-';if(f.bip9.statistics){const s=f.bip9.statistics;prog=fmtNum(s.count)+'/'+fmtNum(s.period)+' ('+(s.period>0?(s.count/s.period*100).toFixed(1):0)+'%)';}}
+    const clr=ib?'var(--dim)':f.a?'var(--green)':st==='started'?'var(--yellow)':st==='locked_in'?'var(--cyan)':st==='failed'?'var(--red)':'var(--text)';
+    fh+='<tr style="color:'+clr+'"><td style="text-align:left">'+esc(name)+'</td><td>'+f.t+'</td><td>'+(f.a?'yes':'no')+'</td><td>'+(f.h!=null?fmtNum(f.h):'-')+'</td><td>'+esc(st)+'</td><td>'+bit+'</td><td style="text-align:left">'+prog+'</td></tr>';}
+  document.getElementById('sig-forks-table').innerHTML=fh;
+}
+
+// ===== Full Analytics =====
+function renderFullAnalytics(stats){
+  if(!stats||!stats.length){document.getElementById('ana-title').textContent='Daily Breakdown (no data)';document.getElementById('ana-table').innerHTML='';return;}
+  const daily={};for(const s of stats){const d=new Date(s.time*1000).toISOString().slice(0,10);if(!daily[d])daily[d]={bl:0,tx:0,fi:0,ru:0,in_:0,br:0,op:0,st:0,or:0,v:0,vs:0,tv:0,fv:0};const a=daily[d];a.bl++;const u=s.tx_count-1;a.tx+=u;a.fi+=s.financial_count;a.ru+=s.rune_count;a.in_+=s.inscription_count;a.br+=s.brc20_count;a.op+=s.opnet_count;a.st+=s.stamp_count;a.or+=s.opreturn_other_count;a.v+=s.bip110_violating_txs;a.vs+=s.bip110_violating_size;a.tv+=s.total_vsize;a.fv+=s.financial_vsize;}
+  const days=Object.keys(daily).sort().reverse();
+  document.getElementById('ana-title').textContent='Daily Breakdown ('+stats.length+' blocks)';
+  const dc=c=>c>0?'var(--magenta)':'var(--dim)';
+  let h='<tr><th style="text-align:left">Date</th><th>Blks</th><th>TXs</th><th>Fin%</th><th>FinSz</th><th>Dat%</th><th>DatSz</th><th style="color:var(--magenta)">Rune</th><th style="color:var(--magenta)">%</th><th style="color:var(--magenta)">Insc</th><th style="color:var(--magenta)">%</th><th style="color:var(--magenta)">BRC</th><th style="color:var(--magenta)">%</th><th style="color:var(--magenta)">OPN</th><th style="color:var(--magenta)">%</th><th style="color:var(--magenta)">Stp</th><th style="color:var(--magenta)">%</th><th style="color:var(--magenta)">OPR</th><th style="color:var(--magenta)">%</th><th style="color:var(--red)">!110</th><th style="color:var(--red)">%</th><th style="color:var(--red)">Saved</th></tr>';
+  for(const day of days){const a=daily[day],dt=a.tx-a.fi,dv=a.tv-a.fv,vp=a.tx>0?a.v/a.tx*100:0,vC=a.v===0?'var(--green)':vp<=1?'var(--yellow)':'var(--red)';
+    h+='<tr><td style="text-align:left">'+day+'</td><td class="dim">'+fmtCompact(a.bl)+'</td><td>'+fmtCompact(a.tx)+'</td>';
+    h+='<td style="color:var(--green)">'+pctS(a.fi,a.tx)+'%</td><td style="color:var(--green)">'+pctS(a.fv,a.tv)+'%</td>';
+    h+='<td style="color:'+(dt>0?'var(--yellow)':'var(--dim)')+'">'+pctS(dt,a.tx)+'%</td><td style="color:'+(dv>0?'var(--yellow)':'var(--dim)')+'">'+pctS(dv,a.tv)+'%</td>';
+    const protos=[[a.ru,dt],[a.in_,dt],[a.br,dt],[a.op,dt],[a.st,dt],[a.or,dt]];
+    for(const[c,tot]of protos){h+='<td style="color:'+dc(c)+'">'+fmtCompact(c)+'</td><td style="color:'+dc(c)+'">'+pctS(c,tot)+'%</td>';}
+    h+='<td style="color:'+vC+'">'+fmtCompact(a.v)+'</td><td style="color:'+vC+'">'+(a.v>0?vp.toFixed(1)+'%':'')+'</td><td style="color:'+vC+'">'+(a.vs>0?fmtBytesS(a.vs):'')+'</td></tr>';}
+  document.getElementById('ana-table').innerHTML=h;
+}
+
+// ===== Charts =====
+function setChartMode(m){chartMode=m;document.querySelectorAll('.chart-btn').forEach((b,i)=>b.classList.toggle('active',i===m));renderCharts();}
+
+function aggDaily(stats,ext){const d={};for(const s of stats){const day=Math.floor(s.time/86400)*86400;if(!d[day])d[day]=[0,0];const[n,de]=ext(s);d[day][0]+=n;d[day][1]+=de;}return Object.entries(d).sort((a,b)=>a[0]-b[0]).map(([t,[n,de]])=>({t:+t*1000,y:de>0?n/de*100:0}));}
+
+function aggHourly(stats,ext){
+  if(!stats.length)return[];
+  const minT=Math.min(...stats.map(s=>s.time)),maxT=Math.max(...stats.map(s=>s.time));
+  const start=Math.floor(minT/3600)*3600,end=Math.ceil(maxT/3600)*3600;
+  const pts=[];for(let h=start;h<=end;h+=3600){const ws=h-86400;let tn=0,td=0;for(const s of stats){if(s.time>=ws&&s.time<=h){const[n,d]=ext(s);tn+=n;td+=d;}}pts.push({t:h*1000,y:td>0?tn/td*100:0});}return pts;
+}
+
+function renderCharts(){
+  if(!anaData||!anaData.stats||!anaData.stats.length)return;
+  const stats=anaData.stats;
+  const labels={0:'OPNET % of Block Weight',1:'Data % of Block Weight',2:'BIP-110 Non-Compliant %'};
+  const colors={0:'#ffd700',1:'#ffd700',2:'#ff4444'};
+  const ext={0:s=>[s.opnet_vsize,s.total_vsize],1:s=>[s.total_vsize-s.financial_vsize,s.total_vsize],2:s=>[s.bip110_violating_vsize,s.total_vsize]};
+  const dPri=aggDaily(stats,ext[chartMode]),hPri=aggHourly(stats,ext[chartMode]);
+  document.getElementById('chart-daily-title').textContent=labels[chartMode]+' (daily)';
+  document.getElementById('chart-hourly-title').textContent=labels[chartMode]+' (24h rolling, hourly)';
+  const cfg=(pts,color,secondary)=>{
+    const datasets=[{label:'weight%',data:pts.map(p=>({x:p.t,y:p.y})),borderColor:color,backgroundColor:color+'33',fill:true,tension:0.3,pointRadius:0,borderWidth:1.5}];
+    if(secondary&&secondary.length)datasets.push({label:'tx count%',data:secondary.map(p=>({x:p.t,y:p.y})),borderColor:'#00d4ff',backgroundColor:'transparent',fill:false,tension:0.3,pointRadius:0,borderWidth:1.5});
+    return{type:'line',data:{datasets},options:{responsive:true,maintainAspectRatio:false,scales:{x:{type:'time',time:{unit:pts.length>200?'day':'hour',tooltipFormat:'MMM d, HH:mm'},grid:{color:'#0f346033'},ticks:{color:'#888',maxTicksLimit:8}},y:{min:0,grid:{color:'#0f346033'},ticks:{color:'#888',callback:v=>v.toFixed(1)+'%'}}},plugins:{legend:{labels:{color:'#e0e0e0'}},tooltip:{callbacks:{label:c=>c.dataset.label+': '+c.parsed.y.toFixed(2)+'%'}}},interaction:{mode:'index',intersect:false}}};
+  };
+  let dSec=null,hSec=null;
+  if(chartMode===2){dSec=aggDaily(stats,s=>[s.bip110_violating_txs,s.tx_count-1]);hSec=aggHourly(stats,s=>[s.bip110_violating_txs,s.tx_count-1]);}
+  if(dailyChart)dailyChart.destroy();if(hourlyChart)hourlyChart.destroy();
+  dailyChart=new Chart(document.getElementById('chart-daily'),cfg(dPri,colors[chartMode],dSec));
+  hourlyChart=new Chart(document.getElementById('chart-hourly'),cfg(hPri,colors[chartMode],hSec));
+}
+
+// ===== Block detail modal =====
+function showBlockModal(height){
+  const s=dashData.block_stats[height],b=(dashData.node.recent_blocks||[]).find(bl=>bl.height===height);if(!s||!b)return;
+  const ut=s.tx_count-1,pct=c=>ut>0?c/ut*100:0,wpct=v=>s.total_vsize>0?v/s.total_vsize*100:0;
+  const protos=[['Financial',s.financial_count,s.financial_vsize,s.financial_bip110v,0],['Runes',s.rune_count,s.rune_vsize,s.rune_bip110v,1],['Inscriptions',s.inscription_count,s.inscription_vsize,s.inscription_bip110v,3],['BRC-20',s.brc20_count,s.brc20_vsize,s.brc20_bip110v,2],['OPNET',s.opnet_count,s.opnet_vsize,s.opnet_bip110v,4],['Stamps',s.stamp_count,s.stamp_vsize,s.stamp_bip110v,5],['Counterparty',s.counterparty_count,s.counterparty_vsize,s.counterparty_bip110v,6],['Omni',s.omni_count,s.omni_vsize,s.omni_bip110v,7],['OP_RET other',s.opreturn_other_count,s.opreturn_other_vsize,s.opreturn_other_bip110v,8]];
+  let h='<span class="modal-close" onclick="closeModal(\'block-modal\')">[Esc] Close</span><div class="modal-title">Block '+fmtNum(b.height)+'</div>';
+  h+='<div class="modal-row"><span class="dim">Output: </span><b>'+fmtBtc(s.total_out)+'</b> <span class="dim">Fees: </span><b>'+fmtFees(s.total_fee)+'</b> <span class="dim">TXs: </span><b>'+ut+'</b></div>';
+  h+='<div class="modal-row"><span class="dim">Weight: </span><b>'+fmtNum(b.weight)+' WU ('+(b.weight/4e6*100).toFixed(1)+'%)</b> <span class="dim">Taproot: </span>spend '+s.taproot_spend_count+' ('+pct(s.taproot_spend_count).toFixed(1)+'%) out '+s.taproot_output_count+' ('+pct(s.taproot_output_count).toFixed(1)+'%)</div>';
+  h+='<table class="modal-table"><tr><th style="text-align:left">Protocol</th><th>Count</th><th>%</th><th>Weight</th><th>Wt%</th><th style="color:var(--red)">!110%</th><th style="color:var(--red)">R1</th><th style="color:var(--red)">R2</th><th style="color:var(--red)">R3</th><th style="color:var(--red)">R4</th><th style="color:var(--red)">R5</th><th style="color:var(--red)">R6</th><th style="color:var(--red)">R7</th></tr>';
+  for(const[la,co,vs,_v,mi]of protos){const iF=la==='Financial',cl=iF?'var(--green)':'var(--yellow)';if(!iF&&co===0){h+='<tr><td style="text-align:left;color:var(--dim)">'+la+'</td><td colspan="12"></td></tr>';continue;}
+    const ru=s.bip110_rule_matrix[mi],vt=ru.reduce((a,b)=>a+b,0),vps=(co>0&&vt>0)?(vt/co*100).toFixed(1)+'%':'';
+    h+='<tr><td style="text-align:left;color:'+cl+'">'+la+'</td><td>'+co+'</td><td style="color:'+cl+'">'+pct(co).toFixed(1)+'%</td><td>'+fmtBytesS(vs)+'</td><td style="color:'+cl+'">'+wpct(vs).toFixed(1)+'%</td><td style="color:var(--red)">'+vps+'</td>';
+    for(let r=0;r<7;r++)h+='<td style="color:'+(ru[r]>0?'var(--red)':'var(--dim)')+'">'+(ru[r]>0?ru[r]:'')+'</td>';h+='</tr>';}
+  const rt=[0,0,0,0,0,0,0];for(const m of s.bip110_rule_matrix)for(let i=0;i<7;i++)rt[i]+=m[i];
+  const tvp=ut>0?s.bip110_violating_txs/ut*100:0;
+  h+='<tr style="border-top:1px solid var(--border)"><td style="text-align:left" class="bold">Total</td><td class="bold">'+ut+'</td><td></td><td class="bold">'+fmtBytesS(s.total_vsize)+'</td><td></td><td style="color:var(--red)">'+(s.bip110_violating_txs>0?tvp.toFixed(1)+'%':'')+'</td>';
+  for(let r=0;r<7;r++)h+='<td style="color:'+(rt[r]>0?'var(--red)':'var(--dim)')+'">'+(rt[r]>0?rt[r]:'')+'</td>';h+='</tr></table>';
+  const cp=ut>0?(ut-s.bip110_violating_txs)/ut*100:100,cc=s.bip110_violating_txs===0?'var(--green)':'var(--yellow)';
+  h+='<div class="modal-row" style="margin-top:8px"><span class="cyan bold">BIP-110: </span><b style="color:'+cc+'">'+cp.toFixed(1)+'% compliant</b> <span class="dim">('+s.bip110_violating_txs+' violating, '+fmtBytes(s.bip110_violating_size)+' savings)</span></div>';
+  if(s.max_opreturn_size>0)h+='<div class="modal-row dim">Largest OP_RETURN: <span style="color:'+(s.max_opreturn_size>83?'var(--red)':'var(--green)')+'">'+s.max_opreturn_size+'B</span> (limit: 83)</div>';
+  if(s.max_spk_size>0)h+='<div class="modal-row dim">Largest scriptPubKey: <span style="color:'+(s.max_spk_size>34?'var(--red)':'var(--green)')+'">'+s.max_spk_size+'B</span> (limit: 34)</div>';
+  if(s.max_witness_item_size>0)h+='<div class="modal-row dim">Largest witness: <span style="color:'+(s.max_witness_item_size>256?'var(--red)':'var(--green)')+'">'+s.max_witness_item_size+'B</span> (limit: 256)</div>';
+  h+='<div class="bip110-desc" style="margin-top:10px"><span class="rule">R1</span> OP_RETURN >83B / SPK >34B &nbsp;<span class="rule">R2</span> Witness >256B &nbsp;<span class="rule">R3</span> Undefined version<br><span class="rule">R4</span> Annex &nbsp;<span class="rule">R5</span> Control >257B &nbsp;<span class="rule">R6</span> OP_SUCCESS &nbsp;<span class="rule">R7</span> OP_IF/OP_NOTIF</div>';
+  document.getElementById('block-modal-content').innerHTML=h;document.getElementById('block-modal').classList.add('active');
+}
+
+// ===== Bit detail modal =====
+const bitDetails={0:['BIP9 Bit 0: csv','Relative lock-time (BIP68/112/113). Activated block 419,328.'],1:['BIP9 Bit 1: segwit','Segregated Witness (BIP141/143/147). Activated block 481,824.'],2:['BIP9 Bit 2: taproot','Taproot/Schnorr (BIP340/341/342). Activated block 709,632.'],4:['BIP9 Bit 4: reduced_data','BIP-110 Reduced Data Temporary Soft Fork. Knots-specific.']};
+function showBitModal(bit){
+  if(!sigData)return;const vers=sigData.node.recent_block_versions||[],total=vers.length;
+  const count=vers.filter(([_,v])=>v>=0x20000000&&(v&(1<<bit))!==0).length;
+  const pct=total>0?count/total*100:0;
+  const info=bitDetails[bit]||(bit>=13&&bit<=28?['BIP320: ASICBoost nonce rolling','Bits 13-28 used by miners for nonce space. ~50% signaling expected.']:['Unassigned BIP9 bit','Available for future soft fork proposals.']);
+  let h='<span class="modal-close" onclick="closeModal(\'bit-modal\')">[Esc] Close</span>';
+  h+='<div class="modal-title">'+esc(info[0])+'</div>';
+  h+='<div class="modal-row"><span class="yellow bold">Signaling: '+fmtNum(count)+'/'+fmtNum(total)+' blocks ('+pct.toFixed(1)+'%)</span></div>';
+  h+='<div class="modal-row" style="margin-top:8px;white-space:pre-wrap">'+esc(info[1])+'</div>';
+  document.getElementById('bit-modal-content').innerHTML=h;document.getElementById('bit-modal').classList.add('active');
+}
+
+function closeModal(id){document.getElementById(id).classList.remove('active');}
+
+// ===== Main render =====
+function render(){
+  if(!dashData||!dashData.node)return;
+  const n=dashData.node;
+  if(n.error){document.getElementById('error-box').style.display='block';document.getElementById('error-box').textContent=n.error;return;}
+  document.getElementById('error-box').style.display='none';
+  if(!n.network.subversion)return;
+  document.getElementById('connecting').style.display='none';document.getElementById('content').style.display='block';
+  const sub=n.network.subversion.replace(/\//g,''),uh=Math.floor(n.uptime/3600),um=Math.floor(n.uptime%3600/60);
+  document.getElementById('status').textContent=sub+' | uptime: '+uh+'h '+um+'m';
+  const isIbd=n.blockchain.initialblockdownload;
+  renderTabs(isIbd);
+  if(isIbd&&activeTab==='dashboard'){activeTab='ibd';switchTab('ibd');}
+  if(!isIbd&&activeTab==='ibd'){activeTab='dashboard';switchTab('dashboard');}
+  if(activeTab==='dashboard'){
+    renderBlockchainCard(n);renderMempoolCard(n);renderNetworkCard(n);renderSystemCard(dashData.system,n);
+    renderBlocksTable(n,dashData.block_stats||{});renderAnalyticsSummary(dashData.block_stats||{});renderPeersTable(n,'peers-table','peers-title');
+  }else if(activeTab==='ibd'){
+    renderIBD(n,dashData.system);renderPeersTable(n,'ibd-peers-table','ibd-peers-title');
+  }else if(activeTab==='known-peers'){renderKnownPeers(n);}
+  if(activeTab==='signaling'&&sigData)renderSignaling(sigData.node);
+  if(activeTab==='analytics'&&anaData)renderFullAnalytics(anaData.stats);
+}
+
+// ===== Polling =====
+async function fetchDashboard(){
+  try{const r=await fetch('/api/dashboard');if(!r.ok)throw new Error('HTTP '+r.status);dashData=await r.json();render();}
+  catch(e){document.getElementById('error-box').style.display='block';document.getElementById('error-box').textContent='Fetch error: '+e.message;}
+}
+async function fetchSignaling(){
+  try{const r=await fetch('/api/signaling');if(!r.ok)return;sigData=await r.json();if(activeTab==='signaling')renderSignaling(sigData.node);}catch(e){}
+}
+async function fetchAnalytics(){
+  try{const r=await fetch('/api/analytics');if(!r.ok)return;anaData=await r.json();if(activeTab==='analytics')renderFullAnalytics(anaData.stats);if(activeTab==='charts')renderCharts();}catch(e){}
+}
+
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeModal('block-modal');closeModal('bit-modal');}});
+document.getElementById('block-modal').addEventListener('click',e=>{if(e.target.id==='block-modal')closeModal('block-modal');});
+document.getElementById('bit-modal').addEventListener('click',e=>{if(e.target.id==='bit-modal')closeModal('bit-modal');});
+
+fetchDashboard();
+setInterval(fetchDashboard,5000);
+setInterval(fetchSignaling,120000);
+setInterval(()=>{if(activeTab==='analytics'||activeTab==='charts')fetchAnalytics();},60000);
+</script>
+</body>
+</html>

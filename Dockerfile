@@ -3,6 +3,7 @@ RUN apt-get update && apt-get install -y pkg-config libssl-dev && rm -rf /var/li
 WORKDIR /app
 COPY Cargo.toml Cargo.lock* ./
 COPY src/ src/
+COPY web/ web/
 
 FROM builder AS test
 RUN cargo test --release
