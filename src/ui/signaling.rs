@@ -32,7 +32,6 @@ impl Screen for SignalingScreen {
         let state = self.state.borrow();
         let data = &state.signaling_data;
         // Merge softforks from both dashboard (fast) and signaling (slow) sources
-        // so node-reported forks like reduced_data appear as soon as dashboard loads
         let mut softforks = state.node_data.blockchain.softforks.clone();
         for (name, fork) in &data.softforks {
             softforks.insert(name.clone(), fork.clone());
@@ -43,7 +42,7 @@ impl Screen for SignalingScreen {
             .split(area);
 
         draw_version_bits(f, layout[0], data, self.selected_bit);
-        draw_softforks(f, layout[1], &softforks);
+        draw_softforks(f, layout[1], &softforks, &data.recent_block_versions);
     }
 
     fn handle_key(&mut self, key: KeyCode) -> KeyResult {
@@ -133,12 +132,36 @@ fn known_buried_softforks() -> BTreeMap<String, crate::rpc::SoftFork> {
     m
 }
 
-fn draw_softforks(f: &mut Frame, area: Rect, softforks: &std::collections::BTreeMap<String, crate::rpc::SoftFork>) {
+fn draw_softforks(f: &mut Frame, area: Rect, softforks: &std::collections::BTreeMap<String, crate::rpc::SoftFork>, block_versions: &[(u64, i64)]) {
+    use crate::rpc::{Bip9Info, Bip9Statistics, SoftFork};
     let header = Row::new(vec!["Name", "Type", "Active", "Height", "Status", "Bit", "Progress"])
         .style(Style::default().fg(Color::Cyan).bold()).bottom_margin(0);
 
     let mut merged = known_buried_softforks();
     for (name, fork) in softforks { merged.insert(name.clone(), fork.clone()); }
+
+    // Inject reduced_data (BIP-110) if not reported by node, with live signaling stats
+    if !merged.contains_key("reduced_data") {
+        let total = block_versions.len() as u64;
+        let count = block_versions.iter()
+            .filter(|&&(_, v)| v >= 0x20000000 && v & (1i64 << 4) != 0)
+            .count() as u64;
+        merged.insert("reduced_data".to_string(), SoftFork {
+            fork_type: "bip9".to_string(),
+            active: false,
+            height: None,
+            bip9: Some(Bip9Info {
+                status: "defined".to_string(),
+                bit: Some(4),
+                start_time: 0,
+                timeout: 0,
+                since: 0,
+                statistics: if total > 0 {
+                    Some(Bip9Statistics { period: total, threshold: (total * 90 / 100), elapsed: total, count, possible: true })
+                } else { None },
+            }),
+        });
+    }
 
     let mut sorted: Vec<(&String, &crate::rpc::SoftFork)> = merged.iter().collect();
     sorted.sort_by(|(_, a), (_, b)| {
