@@ -31,13 +31,19 @@ impl Screen for SignalingScreen {
     fn draw(&self, f: &mut Frame, area: Rect) {
         let state = self.state.borrow();
         let data = &state.signaling_data;
+        // Merge softforks from both dashboard (fast) and signaling (slow) sources
+        // so node-reported forks like reduced_data appear as soon as dashboard loads
+        let mut softforks = state.node_data.blockchain.softforks.clone();
+        for (name, fork) in &data.softforks {
+            softforks.insert(name.clone(), fork.clone());
+        }
         let layout = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Min(6), Constraint::Length(14)])
             .split(area);
 
         draw_version_bits(f, layout[0], data, self.selected_bit);
-        draw_softforks(f, layout[1], data);
+        draw_softforks(f, layout[1], &softforks);
     }
 
     fn handle_key(&mut self, key: KeyCode) -> KeyResult {
@@ -127,12 +133,12 @@ fn known_buried_softforks() -> BTreeMap<String, crate::rpc::SoftFork> {
     m
 }
 
-fn draw_softforks(f: &mut Frame, area: Rect, data: &NodeData) {
+fn draw_softforks(f: &mut Frame, area: Rect, softforks: &std::collections::BTreeMap<String, crate::rpc::SoftFork>) {
     let header = Row::new(vec!["Name", "Type", "Active", "Height", "Status", "Bit", "Progress"])
         .style(Style::default().fg(Color::Cyan).bold()).bottom_margin(0);
 
     let mut merged = known_buried_softforks();
-    for (name, fork) in &data.softforks { merged.insert(name.clone(), fork.clone()); }
+    for (name, fork) in softforks { merged.insert(name.clone(), fork.clone()); }
 
     let mut sorted: Vec<(&String, &crate::rpc::SoftFork)> = merged.iter().collect();
     sorted.sort_by(|(_, a), (_, b)| {
