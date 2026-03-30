@@ -1,6 +1,6 @@
 # knots-tui
 
-Rust TUI dashboard for monitoring a Bitcoin Knots node via JSON-RPC.
+Rust TUI + Web dashboard for monitoring a Bitcoin Knots node via JSON-RPC.
 
 ## Build
 
@@ -14,11 +14,32 @@ Binary output: `out/knots-tui`
 
 ## Run
 
+### TUI mode (terminal)
+
 ```bash
 ./knots-tui --rpc-url http://<node-ip>:8332 --cookie-file /path/to/.cookie
 ```
 
-Or via env vars: `KNOTS_RPC_URL`, `KNOTS_COOKIE_FILE`. Default refresh interval is 5 seconds (`--interval`).
+### Web mode (browser)
+
+```bash
+./knots-tui --rpc-url http://<node-ip>:8332 --rpc-user user --rpc-password pass --web-port 3000
+```
+
+### Demo mode (no node required)
+
+```bash
+./knots-tui --demo
+```
+
+### Auth options
+
+- **Cookie file**: `--cookie-file /path/.cookie` (or `KNOTS_COOKIE_FILE` env)
+- **User/password**: `--rpc-user user --rpc-password pass` (or `KNOTS_RPC_USER` / `KNOTS_RPC_PASSWORD` env)
+- If both are set, user/password takes priority
+- Cookie file defaults to `~/.bitcoin/.cookie` when neither is specified
+
+Other env vars: `KNOTS_RPC_URL`, `KNOTS_WEB_PORT`. Default refresh interval is 5 seconds (`--interval`).
 
 Always get latest release:
 ```bash
@@ -27,10 +48,11 @@ wget -O knots-tui https://github.com/davidvdc/knots-tui/releases/latest/download
 
 ## Project structure
 
-- `src/main.rs` — CLI args (clap), async event loop, terminal setup/teardown, data ingestion from channels
+- `src/main.rs` — CLI args (clap), runtime selection (TUI vs web vs demo), async event loop, terminal setup/teardown
 - `src/service.rs` — `AppService`: async operations (polling, fetching, backfill), loading/spinner state (atomics)
 - `src/rpc.rs` — RPC client with batched JSON-RPC calls, all data structs (`NodeData`, `BlockInfo`, `BlockStats`, `PeerInfo`, etc.)
 - `src/sys.rs` — System stats sampler (CPU, memory, disk I/O, process tracking from /proc)
+- `src/web.rs` — HTTP server (axum): API endpoints, polling tasks, demo data generator, static file serving
 - `src/ui/mod.rs` — `Screen` trait, `SharedState`, `draw()` dispatcher (header/body/footer), screen navigation
 - `src/ui/dashboard.rs` — `DashboardScreen`: info cards, blocks table, peers table, block detail modal, warnings modal
 - `src/ui/ibd.rs` — `IbdScreen`: IBD progress, system stats bars, peers table
@@ -39,6 +61,7 @@ wget -O knots-tui https://github.com/davidvdc/knots-tui/releases/latest/download
 - `src/ui/analytics.rs` — `AnalyticsScreen`: daily breakdown table, DayAgg aggregation
 - `src/ui/charts.rs` — `ChartsScreen`: daily/hourly time-series charts
 - `src/ui/common.rs` — Shared format helpers (`format_number`, `format_bytes`, `format_pct`, etc.) + tests
+- `web/index.html` — Single-page web UI (vanilla HTML/JS + Chart.js), embedded in binary at compile time
 - `Dockerfile` — Builds x86_64 Linux binary using `rust:latest` image
 
 ## Architecture
@@ -120,6 +143,50 @@ The dashboard poll loop runs as a tokio task controlled by `poll_active: AtomicB
 - `svc.set_loading(true)` in `on_enter()` — header shows "(loading...)" with yellow border
 - `svc.set_loading(false)` when data arrives in main loop
 - Dashboard shows "Connecting..." screen before first RPC response
+
+## Web mode
+
+### Architecture
+
+When `--web-port` is set, the binary runs an HTTP server (axum) instead of the TUI:
+- Multi-threaded tokio runtime (`rt-multi-thread`) — required for axum's Send+Sync handlers
+- State shared via `Arc<RwLock<DashboardData>>` and `Arc<RwLock<SignalingData>>`
+- System stats sampler runs in background (1s interval, same as TUI)
+- `web/index.html` embedded in binary via `include_str!` — single file, no external assets needed at runtime
+
+### API endpoints
+
+| Endpoint | Data | Poll interval |
+|---|---|---|
+| `GET /` | Serves embedded HTML page | - |
+| `GET /api/dashboard` | Node data + block stats + system stats | 5s (from JS) |
+| `GET /api/signaling` | 2016 block versions + softforks | 120s (from JS) |
+| `GET /api/analytics` | Full block stats history (sorted by height) | 60s (from JS) |
+
+### Web polling tasks
+
+- **Dashboard**: fetches `fetch_dashboard()` every N seconds, auto-fetches block stats for new/visible blocks
+- **Signaling**: fetches `fetch_signaling()` every 120s
+- **System stats**: samples `/proc` every 1s (Linux only, empty on other platforms)
+- On startup, loads `~/.knots-tui/blockstats.jsonl` into block_stats for analytics/charts history
+
+### Web UI (web/index.html)
+
+Single-page app with tab navigation. Vanilla HTML/JS + Chart.js (loaded from CDN).
+- Tab bar: Dashboard | Known Peers | Signaling | Analytics | Charts (IBD replaces Dashboard during sync)
+- All tabs render immediately on switch using cached data
+- Charts use Chart.js with Luxon time adapter for time-series X axis
+- Block detail and bit detail modals (click to open, Esc/click-outside to close)
+- Responsive: 4-column grid collapses to 2/1 on narrow screens
+
+### Demo mode
+
+`--demo` starts the web server with synthetic data (no RPC connection needed):
+- `demo::generate()` in `web.rs` produces realistic `DashboardData` + `SignalingData`
+- 30 days of block stats (~4320 blocks) with varying protocol patterns
+- 45k known addresses across ipv4/ipv6/onion/i2p with realistic service flag distribution
+- 12 peers, 2016 signaling block versions, full softfork table
+- Defaults to port 3000 (override with `--web-port`)
 
 ## System stats & process tracking
 

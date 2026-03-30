@@ -1,6 +1,8 @@
 # knots-tui
 
-A terminal dashboard for monitoring your Bitcoin Knots node in real time.
+A terminal and web dashboard for monitoring your Bitcoin Knots node in real time.
+
+Two modes: a full-featured **TUI** for terminal use, and a **Web UI** for browser access (designed for Umbrel/self-hosted deployments).
 
 ```
 +----------------------------------------------------------------------+
@@ -25,65 +27,6 @@ A terminal dashboard for monitoring your Bitcoin Knots node in real time.
  q: quit | Tab: switch screen | j/k: switch table | ↑/↓: navigate [. ]
 ```
 
-## Tabs
-
-### Dashboard (quick-check every 5s, full refresh on changes or every 60s)
-
-- **Blockchain** — block height, headers, sync progress, difficulty, disk usage, pruning and IBD status
-- **Mempool** — transaction count, size, memory usage, total fees, min fee rates
-- **Network** — connections (in/out), protocol version, total traffic, relay fees, local addresses
-- **Mining / Warnings** — network hashrate, pooled transactions, node warnings
-- **Recent Blocks** — last 8 blocks with height, tx count, size, weight, age, BIP110 signaling, BTC output, fees, financial tx %, and oversized OP_RETURN count
-  - Financial columns always visible (`-` when stats not loaded)
-  - New blocks are analyzed automatically when mined
-  - Press `d` to load stats for older blocks on restart
-  - Press `Enter` on a block to open a detail modal with full breakdown
-- **Peers** — full table with client user-agent, connection type, tx relay, direction, synced height, ping, connection duration, traffic
-
-### Known Peers (refresh with `r`)
-
-- **Addresses by Last Seen** — time-bucketed breakdown by network type (ipv4, ipv6, onion, i2p, cjdns)
-- **Services by Network** — node service flags (NODE_NETWORK, NODE_WITNESS, NODE_COMPACT_FILTERS, etc.) with adoption percentages per network, your node's flags marked with `*`
-
-### Signaling (auto-loads on tab entry, refresh with `r`)
-
-- **Version Bit Signaling** — all 29 BIP9 version bits (0–28) from the last 2,016 blocks (~1 retarget period), with signal count and percentage. Known deployments (csv, segwit, taproot, reduced_data) labeled. BIP320 nonce rolling bits (13–28) shown in grey. Select a bit and press Enter for a detailed explanation modal.
-- **Softforks** — all known soft forks including buried deployments (bip34, bip66, bip65, csv, segwit, taproot) with activation heights, and any active BIP9 deployments with signaling progress
-
-### Analytics (press `s` to start, `Esc` to stop)
-
-- **Daily Breakdown** — table with daily aggregated transaction analysis over ~30 days (~4320 blocks)
-  - Per day: block count, transaction count, financial %, financial size %, data/spam %, data size %
-  - Per-protocol detail (% of data): Runes, Inscriptions, BRC-20, OPNET, Stamps, OP_RETURN other
-  - Fetches recent-to-old (pruned node friendly)
-  - Existing data loaded automatically on tab entry from `~/.knots-tui/blockstats.jsonl`
-  - Missing blocks detected and shown in title — press `s` to fill gaps
-  - Newly mined blocks automatically added to history
-  - `Esc` stops a running analysis early (partial results shown)
-
-Data fetched using batched RPC calls for efficiency. Dashboard uses cheap quick-checks (`getblockcount` + `getconnectioncount`) every 5 seconds, only triggering a full RPC fetch when block height or peer count changes, or every 60 seconds. Event-driven rendering (zero CPU when idle).
-
-## Block Detail Modal
-
-Press `Enter` on a selected block (with stats loaded) to see:
-
-- Total BTC output and fees
-- Transaction breakdown: financial vs data/spam (mutually exclusive — totals add up)
-- **Protocol breakdown** with per-protocol tx count and percentage:
-  - **Runes** — OP_RETURN with OP_13 tag (`6a5d`)
-  - **BRC-20** — ordinals inscription containing `"brc-20"` JSON payload
-  - **Inscriptions** — ordinals witness envelope (excl. BRC-20)
-  - **OPNET** — tapscript with `"op"` magic bytes (5-item witness, 65-byte control block)
-  - **Stamps** — bare multisig outputs (SRC-20/Stamps protocol)
-  - **Counterparty** — OP_RETURN with `CNTRPRTY` prefix
-  - **Omni Layer** — OP_RETURN with `omni` prefix
-  - **OP_RETURN other** — unclassified nulldata outputs
-  - **Other** — data transactions not matching any known protocol
-- **Taproot usage** — transactions spending from and creating taproot outputs
-- **OP_RETURN size analysis** — oversized count (>83 bytes), largest OP_RETURN size
-
-Navigate between blocks with `↑/↓` while the modal is open.
-
 ## Install
 
 Download the pre-built x86_64 Linux binary from [releases](https://github.com/davidvdc/knots-tui/releases):
@@ -94,23 +37,110 @@ wget -O knots-tui https://github.com/davidvdc/knots-tui/releases/latest/download
 
 ## Usage
 
-All parameters are optional and have sensible defaults:
+### TUI mode (terminal)
 
 ```bash
-./knots-tui [--rpc-url <url>] [--cookie-file <path>] [--interval <seconds>]
+./knots-tui --rpc-url http://<node-ip>:8332 --cookie-file /path/to/.cookie
 ```
+
+### Web mode (browser)
+
+```bash
+./knots-tui --web-port 3000 --rpc-url http://<node-ip>:8332 --rpc-user user --rpc-password pass
+```
+
+Then open `http://localhost:3000` in your browser.
+
+### Demo mode (no node required)
+
+```bash
+./knots-tui --demo
+```
+
+Starts the web UI on port 3000 with realistic synthetic data — useful for testing and evaluation.
+
+### Parameters
 
 | Flag | Env var | Default | Description |
 |---|---|---|---|
 | `--rpc-url` | `KNOTS_RPC_URL` | `http://127.0.0.1:8332` | Bitcoin Knots RPC endpoint |
-| `--cookie-file` | `KNOTS_COOKIE_FILE` | `~/.bitcoin/.cookie` | Path to the `.cookie` auth file |
+| `--cookie-file` | `KNOTS_COOKIE_FILE` | `~/.bitcoin/.cookie` | Path to `.cookie` auth file |
+| `--rpc-user` | `KNOTS_RPC_USER` | | RPC username (alternative to cookie) |
+| `--rpc-password` | `KNOTS_RPC_PASSWORD` | | RPC password (alternative to cookie) |
 | `--interval` | | `5` | Refresh interval in seconds |
+| `--web-port` | `KNOTS_WEB_PORT` | | Enable web mode on this port |
+| `--demo` | | | Start web UI with synthetic demo data |
 
 ### Authentication
 
-Uses cookie-based authentication. Bitcoin Knots writes a `.cookie` file (format: `__cookie__:<token>`) to its data directory on startup. Point `--cookie-file` to it.
+Two authentication methods:
 
-### Keys
+- **Cookie file** (default): Bitcoin Knots writes `__cookie__:<token>` to its data directory on startup. Point `--cookie-file` to it.
+- **User/password**: Set `--rpc-user` and `--rpc-password` (or env vars). Used when both are provided; overrides cookie auth.
+
+## Tabs
+
+Both TUI and Web UI share the same screens:
+
+### Dashboard
+
+- **Blockchain** — block height, headers, sync progress, difficulty, hashrate, disk usage, pruning status
+- **Mempool** — transaction count, size, memory usage, total fees, min fee rates
+- **Network** — connections (in/out), protocol version, total traffic, relay fees, local addresses
+- **System** — CPU, memory, swap, disk I/O for system and per-process (bitcoind, tor)
+- **Recent Blocks** — last 8 blocks with height, tx count, size, weight, age, BIP110 signaling, BTC output, fees, financial tx %, BIP-110 violations
+  - Click/Enter on a block to open a detail modal with full protocol breakdown
+- **Analytics summary** — 24h aggregation of protocol mix and BIP-110 compliance
+- **Peers** — full table with client, connection type, tx relay, direction, height, ping, traffic
+
+### IBD (Initial Block Download)
+
+- Shown automatically when node is syncing (replaces Dashboard)
+- Progress bar, sync speed, ETA, download rate
+- System stats: CPU bars, memory/swap bars, disk I/O
+- Peers table
+
+### Known Peers
+
+- **Addresses by Last Seen** — time-bucketed breakdown by network (ipv4, ipv6, onion, i2p, cjdns)
+- **Services by Network** — service flags with adoption % per network, your node's flags marked with `*`
+
+### Signaling
+
+- **Version Bit Signaling** — all 29 BIP9 bits from last 2,016 blocks with signal count and %. Click/Enter for detail modal.
+- **Softforks** — buried + BIP9 deployments with activation heights and signaling progress
+
+### Analytics
+
+- **Daily Breakdown** — daily aggregated transaction analysis over ~30 days
+  - Financial %, data/spam %, per-protocol detail: Runes, Inscriptions, BRC-20, OPNET, Stamps, OP_RETURN other
+  - BIP-110 violations and disk savings
+  - Data persisted to `~/.knots-tui/blockstats.jsonl`
+
+### Charts (web only uses Chart.js; TUI uses braille charts)
+
+- Three modes: **OPNET**, **Data**, **BIP-110**
+- Daily chart + 24h rolling window hourly chart
+
+## Block Detail Modal
+
+Press Enter (TUI) or click (Web) on a block with stats loaded to see:
+
+- Total BTC output, fees, transaction count
+- Protocol breakdown: financial vs data protocols (Runes, BRC-20, Inscriptions, OPNET, Stamps, Counterparty, Omni, OP_RETURN other)
+- BIP-110 compliance: per-protocol per-rule (R1-R7) violation matrix
+- Taproot usage stats, max observed sizes (OP_RETURN, scriptPubKey, witness element)
+
+## Web UI
+
+The web UI is a single HTML page embedded in the binary — no external files needed. It uses vanilla JS with Chart.js (loaded from CDN) for charts.
+
+API endpoints:
+- `GET /api/dashboard` — node data, block stats, system stats
+- `GET /api/signaling` — version bits and softforks
+- `GET /api/analytics` — full block stats history
+
+## TUI Keys
 
 | Key | Action | Screen |
 |---|---|---|
