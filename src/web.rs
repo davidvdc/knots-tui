@@ -441,58 +441,117 @@ mod demo {
         }).collect()
     }
 
+    /// Deterministic pseudo-random from seed (xorshift-style, cheap mixing).
+    fn prng(seed: u64) -> u64 {
+        let mut x = seed.wrapping_mul(2654435761).wrapping_add(1013904223);
+        x ^= x >> 16; x = x.wrapping_mul(0x45d9f3b); x ^= x >> 16;
+        x
+    }
+
     fn demo_block_stats(height: u64, time: u64, day_offset: u64) -> BlockStats {
-        // Vary data patterns across days for interesting charts
-        let seed = height % 1000;
-        let opnet_base = if day_offset < 5 { 12 } else if day_offset < 15 { 8 } else { 3 };
-        let rune_base = 40 + (seed % 20) as usize;
-        let insc_base = 15 + (seed % 10) as usize;
-        let brc20_base = 3 + (seed % 5) as usize;
-        let opnet = opnet_base + (seed % 6) as usize;
-        let stamp = 2 + (seed % 3) as usize;
-        let counterparty = (seed % 4) as usize;
-        let omni = (seed % 2) as usize;
-        let opret_other = 8 + (seed % 6) as usize;
-        let data_count = rune_base + insc_base + brc20_base + opnet + stamp + counterparty + omni + opret_other;
-        let tx_count = 2800 + (seed % 400) as usize;
-        let financial = tx_count.saturating_sub(1).saturating_sub(data_count);
+        // Use height as deterministic random seed for per-block jitter
+        let r = |n: u64| (prng(height.wrapping_add(n)) % 1000) as f64 / 1000.0; // 0.0..1.0
 
-        let total_vsize = 980_000 + (seed * 500);
-        let fin_vsize = total_vsize * 75 / 100;
-        let rune_vsize = total_vsize * 8 / 100;
-        let insc_vsize = total_vsize * 7 / 100;
-        let brc20_vsize = total_vsize * 2 / 100;
-        let opnet_vsize = total_vsize * 3 / 100;
-        let stamp_vsize = total_vsize * 1 / 100;
-        let cp_vsize = total_vsize / 200;
-        let omni_vsize = total_vsize / 400;
-        let opret_vsize = total_vsize * 2 / 100;
+        // --- Trends over 30 days (day 0 = most recent, day 29 = oldest) ---
+        let d = day_offset as f64;
 
-        let violating = (insc_base + opnet + brc20_base) as usize;
-        let violating_vsize = insc_vsize + opnet_vsize + brc20_vsize;
+        // Runes: surging recently. 2% old -> 10% recent, with noise
+        let rune_pct = 0.02 + 0.08 * (1.0 - d / 30.0).powi(2) + 0.03 * (r(1) - 0.5);
+
+        // Inscriptions: declining from old peak. 8% old -> 3% recent
+        let insc_pct = 0.03 + 0.05 * (d / 30.0) + 0.02 * (r(2) - 0.5);
+
+        // BRC-20: brief spike around days 18-22, otherwise low
+        let brc20_spike = (-(((d - 20.0) / 2.5).powi(2))).exp() * 0.04;
+        let brc20_pct = 0.005 + brc20_spike + 0.005 * r(3);
+
+        // OPNET: growing steadily. 0.5% old -> 6% recent with high variance
+        let opnet_pct = 0.005 + 0.055 * (1.0 - d / 30.0) + 0.025 * (r(4) - 0.5);
+
+        // Stamps: steady low ~0.5-1.5%
+        let stamp_pct = 0.005 + 0.01 * r(5);
+
+        // Counterparty: sporadic, mostly absent. occasional spikes
+        let cp_pct = if r(6) > 0.7 { 0.002 + 0.008 * r(7) } else { 0.001 * r(7) };
+
+        // Omni: nearly extinct, tiny blips
+        let omni_pct = if r(8) > 0.85 { 0.001 + 0.003 * r(9) } else { 0.0002 * r(9) };
+
+        // OP_RET other: steady background 1-3%
+        let opret_pct = 0.01 + 0.02 * r(10);
+
+        // Clamp all to non-negative
+        let clamp = |v: f64| v.max(0.0);
+        let rune_pct = clamp(rune_pct);
+        let insc_pct = clamp(insc_pct);
+        let brc20_pct = clamp(brc20_pct);
+        let opnet_pct = clamp(opnet_pct);
+        let stamp_pct = clamp(stamp_pct);
+        let cp_pct = clamp(cp_pct);
+        let omni_pct = clamp(omni_pct);
+        let opret_pct = clamp(opret_pct);
+
+        let data_pct = rune_pct + insc_pct + brc20_pct + opnet_pct + stamp_pct + cp_pct + omni_pct + opret_pct;
+        let _fin_pct = (1.0 - data_pct).max(0.5); // financial is remainder
+
+        let total_vsize = 950_000 + (prng(height) % 100_000);
+        let tv = total_vsize as f64;
+        let rune_vsize = (tv * rune_pct) as u64;
+        let insc_vsize = (tv * insc_pct) as u64;
+        let brc20_vsize = (tv * brc20_pct) as u64;
+        let opnet_vsize = (tv * opnet_pct) as u64;
+        let stamp_vsize = (tv * stamp_pct) as u64;
+        let cp_vsize = (tv * cp_pct) as u64;
+        let omni_vsize = (tv * omni_pct) as u64;
+        let opret_vsize = (tv * opret_pct) as u64;
+        let fin_vsize = total_vsize.saturating_sub(
+            rune_vsize + insc_vsize + brc20_vsize + opnet_vsize +
+            stamp_vsize + cp_vsize + omni_vsize + opret_vsize);
+
+        // Counts roughly proportional to vsize (data txs are heavier on average)
+        let tx_count = 2400 + (prng(height.wrapping_add(50)) % 800) as usize;
+        let vsize_to_count = |vs: u64, avg_size: u64| (vs / avg_size.max(1)) as usize;
+        let rune_count = vsize_to_count(rune_vsize, 800).max(1);
+        let insc_count = vsize_to_count(insc_vsize, 2000).max(1);
+        let brc20_count = vsize_to_count(brc20_vsize, 1500).max(1);
+        let opnet_count = vsize_to_count(opnet_vsize, 1200).max(1);
+        let stamp_count = vsize_to_count(stamp_vsize, 600).max(1);
+        let cp_count = vsize_to_count(cp_vsize, 500).max(if cp_vsize > 0 { 1 } else { 0 });
+        let omni_count = vsize_to_count(omni_vsize, 400).max(if omni_vsize > 0 { 1 } else { 0 });
+        let opret_count = vsize_to_count(opret_vsize, 300).max(1);
+        let data_count = rune_count + insc_count + brc20_count + opnet_count +
+            stamp_count + cp_count + omni_count + opret_count;
+        let financial_count = tx_count.saturating_sub(1).saturating_sub(data_count);
+
+        // BIP-110 violators: inscriptions, OPNET, BRC-20 always violate; runes sometimes
+        let rune_violators = (rune_count as f64 * 0.15 * (1.0 + r(20))) as usize;
+        let violating = insc_count + opnet_count + brc20_count + rune_violators;
+        let violating_vsize = insc_vsize + opnet_vsize + brc20_vsize +
+            (rune_vsize as f64 * 0.15) as u64;
         let violating_size = violating_vsize * 3 / 2;
 
-        // BIP-110 rule matrix: inscriptions hit R1+R2, OPNET hits R2+R7, BRC-20 hits R2
+        // BIP-110 rule matrix
         let mut matrix = [[0usize; 7]; 10];
-        matrix[3][0] = insc_base; matrix[3][1] = insc_base; // inscriptions: R1, R2
-        matrix[4][1] = opnet; matrix[4][6] = opnet;         // opnet: R2, R7
-        matrix[2][1] = brc20_base;                           // brc20: R2
+        matrix[3][0] = insc_count; matrix[3][1] = insc_count;   // inscriptions: R1, R2
+        matrix[4][1] = opnet_count; matrix[4][6] = opnet_count; // opnet: R2, R7
+        matrix[2][1] = brc20_count;                              // brc20: R2
+        matrix[1][0] = rune_violators;                           // runes: R1 (oversized OP_RETURN)
 
         BlockStats {
             height,
             time,
-            total_out: 250_000_000_000 + seed * 1_000_000,
-            total_fee: 800_000 + seed * 100,
+            total_out: 200_000_000_000 + (prng(height.wrapping_add(30)) % 100_000_000_000),
+            total_fee: 500_000 + (prng(height.wrapping_add(31)) % 1_500_000),
             tx_count,
-            financial_count: financial,
-            rune_count: rune_base,
-            brc20_count: brc20_base,
-            inscription_count: insc_base,
-            opnet_count: opnet,
-            stamp_count: stamp,
-            counterparty_count: counterparty,
-            omni_count: omni,
-            opreturn_other_count: opret_other,
+            financial_count,
+            rune_count,
+            brc20_count,
+            inscription_count: insc_count,
+            opnet_count,
+            stamp_count,
+            counterparty_count: cp_count,
+            omni_count,
+            opreturn_other_count: opret_count,
             other_data_count: 0,
             total_vsize,
             financial_vsize: fin_vsize,
@@ -505,29 +564,29 @@ mod demo {
             omni_vsize,
             opreturn_other_vsize: opret_vsize,
             other_data_vsize: 0,
-            oversized_opreturn_count: rune_base + opret_other,
-            max_opreturn_size: 120,
+            oversized_opreturn_count: rune_count + opret_count,
+            max_opreturn_size: 80 + (prng(height.wrapping_add(40)) % 60) as usize,
             max_spk_size: 34,
-            max_witness_item_size: 520,
-            taproot_spend_count: 400 + (seed % 200) as usize,
-            taproot_output_count: 350 + (seed % 150) as usize,
+            max_witness_item_size: 400 + (prng(height.wrapping_add(41)) % 200) as usize,
+            taproot_spend_count: 300 + (prng(height.wrapping_add(42)) % 400) as usize,
+            taproot_output_count: 250 + (prng(height.wrapping_add(43)) % 350) as usize,
             bip110_checked: true,
             bip110_oversized_spk: 0,
-            bip110_oversized_pushdata: violating,
+            bip110_oversized_pushdata: insc_count + opnet_count + brc20_count,
             bip110_undefined_version: 0,
             bip110_annex: 0,
             bip110_oversized_control: 0,
             bip110_op_success: 0,
-            bip110_op_if: opnet,
+            bip110_op_if: opnet_count,
             bip110_violating_txs: violating,
             bip110_violating_vsize: violating_vsize,
             bip110_violating_size: violating_size,
             bip110_per_protocol: true,
             financial_bip110v: 0,
-            rune_bip110v: 0,
-            brc20_bip110v: brc20_base,
-            inscription_bip110v: insc_base,
-            opnet_bip110v: opnet,
+            rune_bip110v: rune_violators,
+            brc20_bip110v: brc20_count,
+            inscription_bip110v: insc_count,
+            opnet_bip110v: opnet_count,
             stamp_bip110v: 0,
             counterparty_bip110v: 0,
             omni_bip110v: 0,

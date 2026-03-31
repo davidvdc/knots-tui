@@ -149,11 +149,11 @@ body { font-family:'Courier New',monospace; background:var(--bg); color:var(--te
 <!-- Charts -->
 <div class="tab-content" id="tab-charts">
   <div class="section">
-    <div class="chart-controls"><button class="chart-btn active" onclick="setChartMode(0)">OPNET</button><button class="chart-btn" onclick="setChartMode(1)">Data</button><button class="chart-btn" onclick="setChartMode(2)">BIP-110</button></div>
-    <div class="section-title" id="chart-daily-title" style="color:var(--cyan)">Daily</div>
-    <div class="chart-container"><canvas id="chart-daily"></canvas></div>
-    <div class="section-title" id="chart-hourly-title" style="color:var(--cyan)">24h Rolling Window (hourly)</div>
-    <div class="chart-container"><canvas id="chart-hourly"></canvas></div>
+    <div class="chart-controls"><button class="chart-btn active" onclick="setTimeMode(0)">Daily</button><button class="chart-btn" onclick="setTimeMode(1)">24h Rolling</button></div>
+    <div class="section-title" id="chart-bip110-title" style="color:var(--cyan)">BIP-110 Non-Compliant</div>
+    <div class="chart-container"><canvas id="chart-bip110"></canvas></div>
+    <div class="section-title" id="chart-protos-title" style="color:var(--cyan)">Data Protocols — cumulative weight%</div>
+    <div class="chart-container"><canvas id="chart-protos"></canvas></div>
   </div>
 </div>
 </div>
@@ -178,8 +178,8 @@ const now=()=>Math.floor(Date.now()/1000);
 
 // ===== State =====
 let dashData=null, sigData=null, anaData=null;
-let activeTab='dashboard', chartMode=0;
-let dailyChart=null, hourlyChart=null;
+let activeTab='dashboard', chartTimeMode=0;
+let bip110Chart=null, protosChart=null;
 
 // ===== Tabs =====
 const tabDefs=[
@@ -417,7 +417,7 @@ function renderFullAnalytics(stats){
 }
 
 // ===== Charts =====
-function setChartMode(m){chartMode=m;document.querySelectorAll('.chart-btn').forEach((b,i)=>b.classList.toggle('active',i===m));renderCharts();}
+function setTimeMode(m){chartTimeMode=m;document.querySelectorAll('.chart-btn').forEach((b,i)=>b.classList.toggle('active',i===m));renderCharts();}
 
 function aggDaily(stats,ext){const d={};for(const s of stats){const day=Math.floor(s.time/86400)*86400;if(!d[day])d[day]=[0,0];const[n,de]=ext(s);d[day][0]+=n;d[day][1]+=de;}return Object.entries(d).sort((a,b)=>a[0]-b[0]).map(([t,[n,de]])=>({t:+t*1000,y:de>0?n/de*100:0}));}
 
@@ -428,25 +428,52 @@ function aggHourly(stats,ext){
   const pts=[];for(let h=start;h<=end;h+=3600){const ws=h-86400;let tn=0,td=0;for(const s of stats){if(s.time>=ws&&s.time<=h){const[n,d]=ext(s);tn+=n;td+=d;}}pts.push({t:h*1000,y:td>0?tn/td*100:0});}return pts;
 }
 
+function aggDailyMulti(stats){
+  const d={};for(const s of stats){const day=Math.floor(s.time/86400)*86400;if(!d[day])d[day]={p:new Array(8).fill(0),t:0};const e=d[day];
+  e.p[0]+=s.opreturn_other_vsize||0;e.p[1]+=s.omni_vsize||0;e.p[2]+=s.counterparty_vsize||0;e.p[3]+=s.stamp_vsize||0;
+  e.p[4]+=s.opnet_vsize||0;e.p[5]+=s.brc20_vsize||0;e.p[6]+=s.inscription_vsize||0;e.p[7]+=s.rune_vsize||0;e.t+=s.total_vsize||0;}
+  return Object.entries(d).sort((a,b)=>a[0]-b[0]).map(([t,v])=>({t:+t*1000,p:v.p,total:v.t}));
+}
+
+function aggHourlyMulti(stats){
+  if(!stats.length)return[];
+  const minT=Math.min(...stats.map(s=>s.time)),maxT=Math.max(...stats.map(s=>s.time));
+  const start=Math.floor(minT/3600)*3600,end=Math.ceil(maxT/3600)*3600;
+  const pts=[];for(let h=start;h<=end;h+=3600){const ws=h-86400;const p=new Array(8).fill(0);let total=0;
+  for(const s of stats){if(s.time>=ws&&s.time<=h){
+    p[0]+=s.opreturn_other_vsize||0;p[1]+=s.omni_vsize||0;p[2]+=s.counterparty_vsize||0;p[3]+=s.stamp_vsize||0;
+    p[4]+=s.opnet_vsize||0;p[5]+=s.brc20_vsize||0;p[6]+=s.inscription_vsize||0;p[7]+=s.rune_vsize||0;total+=s.total_vsize||0;}}
+  pts.push({t:h*1000,p,total});}return pts;
+}
+
+const protoNames=['OP_RET other','Omni','Counterparty','Stamps','OPNET','BRC-20','Inscriptions','Runes'];
+const protoColors=['#666666','#e0e0e0','#00d4ff','#00ff88','#ff4444','#4488ff','#ff66ff','#ffd700'];
+
 function renderCharts(){
   if(!anaData||!anaData.stats||!anaData.stats.length)return;
   const stats=anaData.stats;
-  const labels={0:'OPNET % of Block Weight',1:'Data % of Block Weight',2:'BIP-110 Non-Compliant %'};
-  const colors={0:'#ffd700',1:'#ffd700',2:'#ff4444'};
-  const ext={0:s=>[s.opnet_vsize,s.total_vsize],1:s=>[s.total_vsize-s.financial_vsize,s.total_vsize],2:s=>[s.bip110_violating_vsize,s.total_vsize]};
-  const dPri=aggDaily(stats,ext[chartMode]),hPri=aggHourly(stats,ext[chartMode]);
-  document.getElementById('chart-daily-title').textContent=labels[chartMode]+' (daily)';
-  document.getElementById('chart-hourly-title').textContent=labels[chartMode]+' (24h rolling, hourly)';
-  const cfg=(pts,color,secondary)=>{
-    const datasets=[{label:'weight%',data:pts.map(p=>({x:p.t,y:p.y})),borderColor:color,backgroundColor:color+'33',fill:true,tension:0.3,pointRadius:0,borderWidth:1.5}];
-    if(secondary&&secondary.length)datasets.push({label:'tx count%',data:secondary.map(p=>({x:p.t,y:p.y})),borderColor:'#00d4ff',backgroundColor:'transparent',fill:false,tension:0.3,pointRadius:0,borderWidth:1.5});
-    return{type:'line',data:{datasets},options:{responsive:true,maintainAspectRatio:false,scales:{x:{type:'time',time:{unit:pts.length>200?'day':'hour',tooltipFormat:'MMM d, HH:mm'},grid:{color:'#0f346033'},ticks:{color:'#888',maxTicksLimit:8}},y:{min:0,grid:{color:'#0f346033'},ticks:{color:'#888',callback:v=>v.toFixed(1)+'%'}}},plugins:{legend:{labels:{color:'#e0e0e0'}},tooltip:{callbacks:{label:c=>c.dataset.label+': '+c.parsed.y.toFixed(2)+'%'}}},interaction:{mode:'index',intersect:false}}};
-  };
-  let dSec=null,hSec=null;
-  if(chartMode===2){dSec=aggDaily(stats,s=>[s.bip110_violating_txs,s.tx_count-1]);hSec=aggHourly(stats,s=>[s.bip110_violating_txs,s.tx_count-1]);}
-  if(dailyChart)dailyChart.destroy();if(hourlyChart)hourlyChart.destroy();
-  dailyChart=new Chart(document.getElementById('chart-daily'),cfg(dPri,colors[chartMode],dSec));
-  hourlyChart=new Chart(document.getElementById('chart-hourly'),cfg(hPri,colors[chartMode],hSec));
+  const isDaily=chartTimeMode===0;
+  const agg=isDaily?aggDaily:aggHourly;
+  const timeLabel=isDaily?'daily':'24h rolling';
+  const timeUnit=isDaily?'day':'hour';
+
+  // BIP-110 chart
+  const bw=agg(stats,s=>[s.bip110_violating_vsize||0,s.total_vsize||0]);
+  const bc=agg(stats,s=>[s.bip110_violating_txs||0,Math.max(0,(s.tx_count||1)-1)]);
+  document.getElementById('chart-bip110-title').textContent='BIP-110 Non-Compliant — '+timeLabel;
+  if(bip110Chart)bip110Chart.destroy();
+  bip110Chart=new Chart(document.getElementById('chart-bip110'),{type:'line',data:{datasets:[
+    {label:'weight%',data:bw.map(p=>({x:p.t,y:p.y})),borderColor:'#ff4444',backgroundColor:'#ff444433',fill:true,tension:0.3,pointRadius:0,borderWidth:1.5},
+    {label:'tx count%',data:bc.map(p=>({x:p.t,y:p.y})),borderColor:'#00d4ff',backgroundColor:'transparent',fill:false,tension:0.3,pointRadius:0,borderWidth:1.5}
+  ]},options:{responsive:true,maintainAspectRatio:false,scales:{x:{type:'time',time:{unit:timeUnit,tooltipFormat:'MMM d, HH:mm'},grid:{color:'#0f346033'},ticks:{color:'#888',maxTicksLimit:8}},y:{min:0,grid:{color:'#0f346033'},ticks:{color:'#888',stepSize:5,callback:v=>v+'%'}}},plugins:{legend:{labels:{color:'#e0e0e0'}},tooltip:{callbacks:{label:c=>c.dataset.label+': '+c.parsed.y.toFixed(2)+'%'}}},interaction:{mode:'index',intersect:false}}});
+
+  // Cumulative protocol chart
+  const buckets=isDaily?aggDailyMulti(stats):aggHourlyMulti(stats);
+  document.getElementById('chart-protos-title').textContent='Data Protocols — cumulative weight% — '+timeLabel;
+  // Individual per-protocol percentages (Chart.js handles stacking)
+  const datasets=[];for(let i=7;i>=0;i--){datasets.push({label:protoNames[i],data:buckets.map(b=>({x:b.t,y:b.total>0?b.p[i]/b.total*100:0})),borderColor:protoColors[i],backgroundColor:protoColors[i]+'88',fill:true,tension:0.3,pointRadius:0,borderWidth:1});}
+  if(protosChart)protosChart.destroy();
+  protosChart=new Chart(document.getElementById('chart-protos'),{type:'line',data:{datasets},options:{responsive:true,maintainAspectRatio:false,scales:{x:{type:'time',time:{unit:timeUnit,tooltipFormat:'MMM d, HH:mm'},grid:{color:'#0f346033'},ticks:{color:'#888',maxTicksLimit:8}},y:{min:0,stacked:true,grid:{color:'#0f346033'},ticks:{color:'#888',stepSize:5,callback:v=>v+'%'}}},plugins:{legend:{labels:{color:'#e0e0e0'}},tooltip:{mode:'index',callbacks:{label:c=>c.dataset.label+': '+c.parsed.y.toFixed(2)+'%'}}},interaction:{mode:'index',intersect:false}}});
 }
 
 // ===== Block detail modal =====

@@ -10,37 +10,30 @@ use super::{KeyResult, Screen, StateRef};
 pub struct ChartsScreen {
     svc: Arc<AppService>,
     state: StateRef,
-    chart_mode: u8,
+    time_mode: u8, // 0 = daily, 1 = rolling 24h
 }
 
 impl ChartsScreen {
     pub fn new(svc: Arc<AppService>, state: StateRef) -> Self {
-        Self { svc, state, chart_mode: 0 }
+        Self { svc, state, time_mode: 0 }
     }
 }
 
 impl Screen for ChartsScreen {
-    fn name(&self) -> &str {
-        match self.chart_mode {
-            0 => "Charts: OPNET",
-            1 => "Charts: Data",
-            _ => "Charts: BIP-110",
-        }
-    }
+    fn name(&self) -> &str { "Charts" }
 
     fn footer_hint(&self) -> &str {
-        " q: quit | Tab: dashboard | j/k: switch metric "
+        " q: quit | Tab: dashboard | h/l: daily/rolling "
     }
 
     fn draw(&self, f: &mut Frame, area: Rect) {
         let state = self.state.borrow();
-        draw_charts(f, area, &state.analytics, self.chart_mode);
+        draw_charts(f, area, &state.analytics, self.time_mode);
     }
 
     fn handle_key(&mut self, key: KeyCode) -> KeyResult {
         match key {
-            KeyCode::Char('j') => { self.chart_mode = (self.chart_mode + 1) % 3; KeyResult::None }
-            KeyCode::Char('k') => { self.chart_mode = self.chart_mode.checked_sub(1).unwrap_or(2); KeyResult::None }
+            KeyCode::Char('h') | KeyCode::Char('l') => { self.time_mode = 1 - self.time_mode; KeyResult::None }
             KeyCode::Esc => KeyResult::Quit,
             _ => KeyResult::None,
         }
@@ -55,7 +48,33 @@ impl Screen for ChartsScreen {
     }
 }
 
-fn draw_charts(f: &mut Frame, area: Rect, analytics: &crate::AnalyticsData, chart_mode: u8) {
+// Protocol definitions in stacking order (bottom to top)
+const PROTOS: &[(&str, Color)] = &[
+    ("OP_RET",   Color::DarkGray),
+    ("Omni",     Color::White),
+    ("CNTRPRTY", Color::Cyan),
+    ("Stamps",   Color::Green),
+    ("OPNET",    Color::Red),
+    ("BRC-20",   Color::Blue),
+    ("Inscr",    Color::Magenta),
+    ("Runes",    Color::Yellow),
+];
+
+fn extract_proto_vsize(s: &BlockStats, idx: usize) -> u64 {
+    match idx {
+        0 => s.opreturn_other_vsize,
+        1 => s.omni_vsize,
+        2 => s.counterparty_vsize,
+        3 => s.stamp_vsize,
+        4 => s.opnet_vsize,
+        5 => s.brc20_vsize,
+        6 => s.inscription_vsize,
+        7 => s.rune_vsize,
+        _ => 0,
+    }
+}
+
+fn draw_charts(f: &mut Frame, area: Rect, analytics: &crate::AnalyticsData, time_mode: u8) {
     if analytics.stats.is_empty() {
         let block = Block::default()
             .borders(Borders::ALL)
@@ -70,130 +89,149 @@ fn draw_charts(f: &mut Frame, area: Rect, analytics: &crate::AnalyticsData, char
     }
 
     let stats = &analytics.stats;
+    let is_daily = time_mode == 0;
+    let time_label = if is_daily { "daily" } else { "24h rolling" };
 
-    let (daily_primary, hourly_primary) = match chart_mode {
-        0 => (
-            chart_aggregate_daily(stats, |s| (s.opnet_vsize, s.total_vsize)),
-            chart_aggregate_hourly(stats, |s| (s.opnet_vsize, s.total_vsize)),
-        ),
-        1 => (
-            chart_aggregate_daily(stats, |s| (s.total_vsize.saturating_sub(s.financial_vsize), s.total_vsize)),
-            chart_aggregate_hourly(stats, |s| (s.total_vsize.saturating_sub(s.financial_vsize), s.total_vsize)),
-        ),
-        _ => (
-            chart_aggregate_daily(stats, |s| (s.bip110_violating_vsize, s.total_vsize)),
-            chart_aggregate_hourly(stats, |s| (s.bip110_violating_vsize, s.total_vsize)),
-        ),
-    };
+    // BIP-110 data
+    let bip110_weight = agg(stats, |s| (s.bip110_violating_vsize, s.total_vsize), is_daily);
+    let bip110_count = agg(stats, |s| (s.bip110_violating_txs as u64, s.tx_count.saturating_sub(1) as u64), is_daily);
 
-    let daily_secondary = if chart_mode == 2 {
-        chart_aggregate_daily(stats, |s| (s.bip110_violating_txs as u64, s.tx_count.saturating_sub(1) as u64))
-    } else { Vec::new() };
-    let hourly_secondary = if chart_mode == 2 {
-        chart_aggregate_hourly(stats, |s| (s.bip110_violating_txs as u64, s.tx_count.saturating_sub(1) as u64))
-    } else { Vec::new() };
-
-    let num_days = daily_primary.len();
-    let (primary_label, primary_color): (&str, Color) = match chart_mode {
-        0 | 1 => ("weight%", Color::Yellow),
-        _ => ("weight%", Color::Red),
-    };
-
-    let top_title = match chart_mode {
-        0 => format!(" OPNET % of Block Weight — daily ({} days) ", num_days),
-        1 => format!(" Data % of Block Weight — daily ({} days) ", num_days),
-        _ => format!(" BIP-110 Non-Compliant — daily ({} days) ", num_days),
-    };
-    let bottom_title = match chart_mode {
-        0 => " OPNET % of Block Weight — 24h Rolling Window (hourly) ",
-        1 => " Data % of Block Weight — 24h Rolling Window (hourly) ",
-        _ => " BIP-110 Non-Compliant — 24h Rolling Window (hourly) ",
-    };
-
-    let fmt_date = |ts: f64| -> String {
-        chrono::DateTime::from_timestamp(ts as i64, 0)
-            .map(|dt| dt.format("%m-%d").to_string())
-            .unwrap_or_default()
-    };
-    let fmt_date_hour = |ts: f64| -> String {
-        chrono::DateTime::from_timestamp(ts as i64, 0)
-            .map(|dt| dt.format("%d %H:%M").to_string())
-            .unwrap_or_default()
-    };
-    let y_labels = |top: f64, n: usize| -> Vec<Span<'static>> {
-        (0..=n).map(|i| {
-            let v = top * i as f64 / n as f64;
-            if v == 0.0 { Span::raw("0") } else { Span::raw(format!("{:.1}", v)) }
-        }).collect()
-    };
-    let x_labels_daily = |min: f64, max: f64, n: usize| -> Vec<Span<'static>> {
-        (0..=n).map(|i| {
-            let ts = min + (max - min) * i as f64 / n as f64;
-            Span::raw(fmt_date(ts))
-        }).collect()
-    };
-    let x_labels_hourly = |min: f64, max: f64, n: usize| -> Vec<Span<'static>> {
-        (0..=n).map(|i| {
-            let ts = min + (max - min) * i as f64 / n as f64;
-            Span::raw(fmt_date_hour(ts))
-        }).collect()
-    };
-
-    let d_min = daily_primary.first().map(|(x, _)| *x).unwrap_or(0.0);
-    let d_max = daily_primary.last().map(|(x, _)| *x).unwrap_or(1.0);
-    let d_range = if (d_max - d_min).abs() < 1.0 { [d_min - 86400.0, d_max + 86400.0] } else { [d_min, d_max] };
-    let mut d_y_max = daily_primary.iter().map(|(_, y)| *y).fold(0.0f64, f64::max);
-    if !daily_secondary.is_empty() { d_y_max = d_y_max.max(daily_secondary.iter().map(|(_, y)| *y).fold(0.0f64, f64::max)); }
-    let d_y_top = (d_y_max * 1.1).max(0.5).min(100.0);
-
-    let h_min = hourly_primary.first().map(|(x, _)| *x).unwrap_or(0.0);
-    let h_max = hourly_primary.last().map(|(x, _)| *x).unwrap_or(1.0);
-    let h_range = if (h_max - h_min).abs() < 1.0 { [h_min - 3600.0, h_max + 3600.0] } else { [h_min, h_max] };
-    let mut h_y_max = hourly_primary.iter().map(|(_, y)| *y).fold(0.0f64, f64::max);
-    if !hourly_secondary.is_empty() { h_y_max = h_y_max.max(hourly_secondary.iter().map(|(_, y)| *y).fold(0.0f64, f64::max)); }
-    let h_y_top = (h_y_max * 1.1).max(0.5).min(100.0);
+    // Cumulative protocol data
+    let proto_cum = build_cumulative_protos(stats, is_daily);
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(area);
 
-    let mut top_datasets = vec![
-        Dataset::default().name(primary_label).marker(symbols::Marker::Braille)
-            .graph_type(GraphType::Line).style(Style::default().fg(primary_color)).data(&daily_primary),
-    ];
-    if !daily_secondary.is_empty() {
-        top_datasets.push(Dataset::default().name("tx count%").marker(symbols::Marker::Braille)
-            .graph_type(GraphType::Line).style(Style::default().fg(Color::Cyan)).data(&daily_secondary));
+    // --- Top: BIP-110 ---
+    {
+        let title = format!(" BIP-110 Non-Compliant -- {} ", time_label);
+        let (x_min, x_max) = x_bounds(&bip110_weight);
+        let pad = if is_daily { 86400.0 } else { 3600.0 };
+        let x_range = if (x_max - x_min).abs() < 1.0 { [x_min - pad, x_max + pad] } else { [x_min, x_max] };
+        let y_max = max_y(&bip110_weight).max(max_y(&bip110_count));
+        let y_top = round_y_top(y_max);
+        let datasets = vec![
+            Dataset::default().name("weight%").marker(symbols::Marker::Braille)
+                .graph_type(GraphType::Line).style(Style::default().fg(Color::Red)).data(&bip110_weight),
+            Dataset::default().name("tx count%").marker(symbols::Marker::Braille)
+                .graph_type(GraphType::Line).style(Style::default().fg(Color::Cyan)).data(&bip110_count),
+        ];
+        let chart = Chart::new(datasets)
+            .block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).title(title).style(Style::default().fg(Color::Cyan)))
+            .legend_position(Some(LegendPosition::TopLeft))
+            .x_axis(Axis::default().style(Style::default().fg(Color::DarkGray)).bounds(x_range).labels(make_x_labels(x_min, x_max, 6, is_daily)))
+            .y_axis(Axis::default().style(Style::default().fg(Color::DarkGray)).bounds([0.0, y_top]).labels(make_y_labels(y_top)));
+        f.render_widget(chart, chunks[0]);
     }
 
-    let chart_top = Chart::new(top_datasets)
-        .block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).title(top_title).style(Style::default().fg(Color::Cyan)))
-        .legend_position(Some(LegendPosition::TopLeft))
-        .x_axis(Axis::default().style(Style::default().fg(Color::DarkGray)).bounds(d_range)
-            .labels(x_labels_daily(d_min, d_max, 6)))
-        .y_axis(Axis::default().title("%").style(Style::default().fg(Color::DarkGray)).bounds([0.0, d_y_top]).labels(y_labels(d_y_top, 5)));
-    f.render_widget(chart_top, chunks[0]);
+    // --- Bottom: cumulative protocol weight% ---
+    {
+        let title = format!(" Data Protocols -- cumulative weight% -- {} ", time_label);
+        let top_idx = PROTOS.len() - 1;
+        let (x_min, x_max) = if proto_cum[top_idx].is_empty() { (0.0, 1.0) } else { x_bounds(&proto_cum[top_idx]) };
+        let pad = if is_daily { 86400.0 } else { 3600.0 };
+        let x_range = if (x_max - x_min).abs() < 1.0 { [x_min - pad, x_max + pad] } else { [x_min, x_max] };
+        let y_max = max_y(&proto_cum[top_idx]);
+        let y_top = round_y_top(y_max);
 
-    let mut bottom_datasets = vec![
-        Dataset::default().name(primary_label).marker(symbols::Marker::Braille)
-            .graph_type(GraphType::Line).style(Style::default().fg(primary_color)).data(&hourly_primary),
-    ];
-    if !hourly_secondary.is_empty() {
-        bottom_datasets.push(Dataset::default().name("tx count%").marker(symbols::Marker::Braille)
-            .graph_type(GraphType::Line).style(Style::default().fg(Color::Cyan)).data(&hourly_secondary));
+        // Draw highest cumulative first so lower lines paint on top
+        let mut datasets = Vec::new();
+        for i in (0..PROTOS.len()).rev() {
+            datasets.push(
+                Dataset::default().name(PROTOS[i].0).marker(symbols::Marker::Braille)
+                    .graph_type(GraphType::Line).style(Style::default().fg(PROTOS[i].1)).data(&proto_cum[i])
+            );
+        }
+        let chart = Chart::new(datasets)
+            .block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).title(title).style(Style::default().fg(Color::Cyan)))
+            .legend_position(Some(LegendPosition::TopLeft))
+            .x_axis(Axis::default().style(Style::default().fg(Color::DarkGray)).bounds(x_range).labels(make_x_labels(x_min, x_max, 6, is_daily)))
+            .y_axis(Axis::default().style(Style::default().fg(Color::DarkGray)).bounds([0.0, y_top]).labels(make_y_labels(y_top)));
+        f.render_widget(chart, chunks[1]);
     }
-
-    let chart_bottom = Chart::new(bottom_datasets)
-        .block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).title(bottom_title).style(Style::default().fg(Color::Cyan)))
-        .legend_position(Some(LegendPosition::TopLeft))
-        .x_axis(Axis::default().style(Style::default().fg(Color::DarkGray)).bounds(h_range)
-            .labels(x_labels_hourly(h_min, h_max, 6)))
-        .y_axis(Axis::default().title("%").style(Style::default().fg(Color::DarkGray)).bounds([0.0, h_y_top]).labels(y_labels(h_y_top, 5)));
-    f.render_widget(chart_bottom, chunks[1]);
 }
 
-fn chart_aggregate_daily(stats: &[BlockStats], extract: impl Fn(&BlockStats) -> (u64, u64)) -> Vec<(f64, f64)> {
+fn round_y_top(y_max: f64) -> f64 {
+    ((y_max * 1.1 / 5.0).ceil() * 5.0).max(5.0).min(100.0)
+}
+
+fn x_bounds(data: &[(f64, f64)]) -> (f64, f64) {
+    (data.first().map(|(x, _)| *x).unwrap_or(0.0), data.last().map(|(x, _)| *x).unwrap_or(1.0))
+}
+
+fn max_y(data: &[(f64, f64)]) -> f64 {
+    data.iter().map(|(_, y)| *y).fold(0.0f64, f64::max)
+}
+
+fn make_y_labels(top: f64) -> Vec<Span<'static>> {
+    let n = (top / 5.0) as usize;
+    (0..=n).map(|i| Span::raw(format!("{}%", i * 5))).collect()
+}
+
+fn make_x_labels(min: f64, max: f64, n: usize, daily: bool) -> Vec<Span<'static>> {
+    (0..=n).map(|i| {
+        let ts = min + (max - min) * i as f64 / n as f64;
+        let s = chrono::DateTime::from_timestamp(ts as i64, 0)
+            .map(|dt| if daily { dt.format("%m-%d").to_string() } else { dt.format("%d %H:%M").to_string() })
+            .unwrap_or_default();
+        Span::raw(s)
+    }).collect()
+}
+
+fn agg(stats: &[BlockStats], extract: impl Fn(&BlockStats) -> (u64, u64), daily: bool) -> Vec<(f64, f64)> {
+    if daily { agg_daily(stats, extract) } else { agg_hourly(stats, extract) }
+}
+
+fn build_cumulative_protos(stats: &[BlockStats], daily: bool) -> Vec<Vec<(f64, f64)>> {
+    let buckets: Vec<(f64, Vec<u64>, u64)> = if daily { agg_daily_multi(stats) } else { agg_hourly_multi(stats) };
+    let mut result: Vec<Vec<(f64, f64)>> = vec![Vec::with_capacity(buckets.len()); PROTOS.len()];
+    for (ts, protos, total) in &buckets {
+        let mut cum = 0.0;
+        for i in 0..PROTOS.len() {
+            cum += if *total > 0 { protos[i] as f64 / *total as f64 * 100.0 } else { 0.0 };
+            result[i].push((*ts, cum));
+        }
+    }
+    result
+}
+
+fn agg_daily_multi(stats: &[BlockStats]) -> Vec<(f64, Vec<u64>, u64)> {
+    let mut daily: BTreeMap<u64, (Vec<u64>, u64)> = BTreeMap::new();
+    for s in stats {
+        let day = (s.time / 86400) * 86400;
+        let entry = daily.entry(day).or_insert_with(|| (vec![0u64; PROTOS.len()], 0));
+        for i in 0..PROTOS.len() { entry.0[i] += extract_proto_vsize(s, i); }
+        entry.1 += s.total_vsize;
+    }
+    daily.into_iter().map(|(ts, (p, t))| (ts as f64, p, t)).collect()
+}
+
+fn agg_hourly_multi(stats: &[BlockStats]) -> Vec<(f64, Vec<u64>, u64)> {
+    let min_time = stats.iter().map(|s| s.time).min().unwrap_or(0);
+    let max_time = stats.iter().map(|s| s.time).max().unwrap_or(0);
+    let start = (min_time / 3600) * 3600;
+    let end = ((max_time / 3600) + 1) * 3600;
+    let mut pts = Vec::new();
+    let mut h = start;
+    while h <= end {
+        let ws = h.saturating_sub(86400);
+        let mut protos = vec![0u64; PROTOS.len()];
+        let mut total = 0u64;
+        for s in stats {
+            if s.time >= ws && s.time <= h {
+                for i in 0..PROTOS.len() { protos[i] += extract_proto_vsize(s, i); }
+                total += s.total_vsize;
+            }
+        }
+        pts.push((h as f64, protos, total));
+        h += 3600;
+    }
+    pts
+}
+
+fn agg_daily(stats: &[BlockStats], extract: impl Fn(&BlockStats) -> (u64, u64)) -> Vec<(f64, f64)> {
     let mut daily: BTreeMap<u64, (u64, u64)> = BTreeMap::new();
     for s in stats {
         let day = (s.time / 86400) * 86400;
@@ -207,26 +245,24 @@ fn chart_aggregate_daily(stats: &[BlockStats], extract: impl Fn(&BlockStats) -> 
     }).collect()
 }
 
-fn chart_aggregate_hourly(stats: &[BlockStats], extract: impl Fn(&BlockStats) -> (u64, u64)) -> Vec<(f64, f64)> {
+fn agg_hourly(stats: &[BlockStats], extract: impl Fn(&BlockStats) -> (u64, u64)) -> Vec<(f64, f64)> {
     let min_time = stats.iter().map(|s| s.time).min().unwrap_or(0);
     let max_time = stats.iter().map(|s| s.time).max().unwrap_or(0);
-    let start_hour = (min_time / 3600) * 3600;
-    let end_hour = ((max_time / 3600) + 1) * 3600;
-    let mut points = Vec::new();
-    let mut hour = start_hour;
-    while hour <= end_hour {
-        let window_start = hour.saturating_sub(86400);
-        let mut total_num = 0u64;
-        let mut total_den = 0u64;
+    let start = (min_time / 3600) * 3600;
+    let end = ((max_time / 3600) + 1) * 3600;
+    let mut pts = Vec::new();
+    let mut h = start;
+    while h <= end {
+        let ws = h.saturating_sub(86400);
+        let mut tn = 0u64; let mut td = 0u64;
         for s in stats {
-            if s.time >= window_start && s.time <= hour {
-                let (num, den) = extract(s);
-                total_num += num; total_den += den;
+            if s.time >= ws && s.time <= h {
+                let (n, d) = extract(s);
+                tn += n; td += d;
             }
         }
-        let pct = if total_den > 0 { total_num as f64 / total_den as f64 * 100.0 } else { 0.0 };
-        points.push((hour as f64, pct));
-        hour += 3600;
+        pts.push((h as f64, if td > 0 { tn as f64 / td as f64 * 100.0 } else { 0.0 }));
+        h += 3600;
     }
-    points
+    pts
 }

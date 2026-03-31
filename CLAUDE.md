@@ -32,6 +32,12 @@ Binary output: `out/knots-tui`
 ./knots-tui --demo
 ```
 
+### Running via Docker (no local glibc/OpenSSL needed)
+
+```bash
+docker run --rm --platform linux/amd64 -p 3000:3000 -v "$(pwd)/out/knots-tui:/knots-tui:ro" rust:latest /knots-tui --demo --web-port 3000
+```
+
 ### Auth options
 
 - **Cookie file**: `--cookie-file /path/.cookie` (or `KNOTS_COOKIE_FILE` env)
